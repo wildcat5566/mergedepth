@@ -61,18 +61,5 @@ def ground_truth_preprocess(dataset_dir):
     
     t1 = time.time() - t0
     print('file count: ' + str(n_files) + ', elapsed_time: ' + str(t1) + ' sec')
-        
-def show_lidar(img, dots):
-    canvas = (img*255).astype(np.uint8)
-    canvas = cv2.cvtColor(canvas, cv2.COLOR_RGB2HSV)
-    for i in range(dots.shape[0]):
-        for j in range(dots.shape[1]):
-            if dots[i][j]:
-                cv2.circle(canvas, (j,i), 2, (int(dots[i][j]),255,255),-1)
 
-    canvas = cv2.cvtColor(canvas, cv2.COLOR_HSV2RGB)
-    plt.subplots(1,1, figsize = (18,5)) #13,3
-    plt.title('Lidar data')
-    plt.imshow(canvas)
-    
         
