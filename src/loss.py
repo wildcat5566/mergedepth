@@ -1,5 +1,4 @@
 import numpy as np
-from kitti_foundation import Kitti, Kitti_util
 from numpy.linalg import multi_dot, inv
 
 #0926 series
@@ -30,14 +29,14 @@ def remap(p2, Zw, direction):
         p3 = np.dot(K2R2_K3, Zw*p2) - K2R2C2
         return [float(p3[0] / p3[2]), float(p3[1] / p3[2])]
 
-def reconstruct(depth_map, src, direction):
+def reconstruct(depth_map, src_image, direction):
     #Bind original pixels with depth maps
     depths = []
     colors = []
-    for x in range(src.shape[1]): #width
-        for y in range(src.shape[0]):
+    for x in range(src_image.shape[1]): #width
+        for y in range(src_image.shape[0]):
             depths.append([x,y,depth_map[y][x]])
-            colors.append(src[y][x])
+            colors.append(src_image[y][x])
 
     #remap pixel positions to complementary view (2-D)
     px, py = [], []
@@ -48,9 +47,9 @@ def reconstruct(depth_map, src, direction):
 
     #map original color of source image pixels
     colors = np.dot(np.array(colors), 255).astype(int)
-    canvas = np.zeros_like(src, dtype=np.uint8) #(src*255).astype(np.uint8)*0
+    canvas = np.zeros_like(src_image, dtype=np.uint8) #(src*255).astype(np.uint8)*0
     for i in range(len(px)):
-        if(0 <= px[i] < src.shape[1] and 0 <= py[i] < src.shape[0]):
+        if(0 <= px[i] < src_image.shape[1] and 0 <= py[i] < src_image.shape[0]):
             canvas[py[i]][px[i]][0] = colors[i][0]
             canvas[py[i]][px[i]][1] = colors[i][1]
             canvas[py[i]][px[i]][2] = colors[i][2]
@@ -74,6 +73,8 @@ def recon_loss(tar, syn):
     return round(loss / pt, 4)
 
 ##############################################################################
+"""Move to preprocess.py
+#from src.kitti_foundation import Kitti, Kitti_util
 def crop_lidar(image_path, velo_path, v2c_filepath, c2c_filepath, frame_id, save_path=None):
     v_fov, h_fov = (-24.9, 2.0), (-90, 90)
     velo = Kitti(frame=frame_id, velo_path=velo_path)
@@ -92,6 +93,9 @@ def crop_lidar(image_path, velo_path, v2c_filepath, c2c_filepath, frame_id, save
             dots[y_index, x_index] = depths[i]
             
     return np.asarray(dots)
+"""
+def read_mat(file):
+    pass
 
 def gt_loss(ref, dots):
     loss = 0

@@ -267,6 +267,11 @@ class Kitti_util(Kitti):
             if key == 'T':
                 T = np.fromstring(val, sep=' ')
                 T = T.reshape(3, 1)
+                ######
+                T[0] += (-0.47310 - 0.05957)
+                T[1] += (0.005551 - 0.00029)
+                T[2] += (-0.0052509 - 0.002577)
+                ######
         return R, T
 
     def __calib_cam2cam(self):
@@ -285,6 +290,9 @@ class Kitti_util(Kitti):
 
         for line in self.c2c_file:
             (key, val) = line.split(':', 1)
+            ######
+            mode = '03'
+            ######
             if key == ('P_rect_' + mode):
                 P_ = np.fromstring(val, sep=' ')
                 P_ = P_.reshape(3, 4)
