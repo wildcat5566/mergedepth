@@ -5,7 +5,6 @@ github.com/windowsub0406
 import numpy as np
 import glob
 import cv2
-from src import parseTrackletXML as pt_XML
 
 class Kitti:
 
@@ -174,59 +173,6 @@ class Kitti:
             file = f.readlines()
             return file
 
-    def __load_tracklet(self):
-        """ extract tracklet's 3d box points and type """
-
-        # read info from xml file
-        tracklets = pt_XML.parseXML(self.__xml_path)
-
-        f_tracklet = {}
-        f_type = {}
-
-        # refered to parseTrackletXML.py's example function
-        # loop over tracklets
-        for tracklet in tracklets:
-
-            # this part is inspired by kitti object development kit matlab code: computeBox3D
-            h, w, l = tracklet.size
-            trackletBox = np.array([  # in velodyne coordinates around zero point and without orientation yet\
-                [-l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2], \
-                [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2], \
-                [0.0, 0.0, 0.0, 0.0, h, h, h, h]])
-
-            # loop over all data in tracklet
-            for translation, rotation, state, occlusion, truncation, amtOcclusion, amtBorders, absoluteFrameNumber in tracklet:
-
-                # determine if object is in the image; otherwise continue
-                if truncation not in (pt_XML.TRUNC_IN_IMAGE, pt_XML.TRUNC_TRUNCATED):
-                    continue
-
-                # re-create 3D bounding box in velodyne coordinate system
-                yaw = rotation[2]  # other rotations are 0 in all xml files I checked
-                assert np.abs(rotation[:2]).sum() == 0, 'object rotations other than yaw given!'
-                rotMat = np.array([ \
-                    [np.cos(yaw), -np.sin(yaw), 0.0], \
-                    [np.sin(yaw), np.cos(yaw), 0.0], \
-                    [0.0, 0.0, 1.0]])
-
-                cornerPosInVelo = np.dot(rotMat, trackletBox) + np.tile(translation, (8, 1)).T
-
-                if absoluteFrameNumber in f_tracklet:
-                    f_tracklet[absoluteFrameNumber] += [cornerPosInVelo]
-                    f_type[absoluteFrameNumber] += [tracklet.objectType]
-                else:
-                    f_tracklet[absoluteFrameNumber] = [cornerPosInVelo]
-                    f_type[absoluteFrameNumber] = [tracklet.objectType]
-
-        # fill none in non object frame
-        if self.num_frame is not None:
-            for i in range(self.num_frame):
-                if i not in f_tracklet:
-                    f_tracklet[i] = None
-                    f_type[i] = None
-
-        return f_tracklet, f_type
-
     def __del__(self):
         pass
 
@@ -268,9 +214,9 @@ class Kitti_util(Kitti):
                 T = np.fromstring(val, sep=' ')
                 T = T.reshape(3, 1)
                 ######
-                T[0] += (-0.47310 - 0.05957)
-                T[1] += (0.005551 - 0.00029)
-                T[2] += (-0.0052509 - 0.002577)
+                #T[0] += (-0.47310 - 0.05957)
+                #T[1] += (0.005551 - 0.00029)
+                #T[2] += (-0.0052509 - 0.002577)
                 ######
         return R, T
 
@@ -291,7 +237,7 @@ class Kitti_util(Kitti):
         for line in self.c2c_file:
             (key, val) = line.split(':', 1)
             ######
-            mode = '03'
+            #mode = '03'
             ######
             if key == ('P_rect_' + mode):
                 P_ = np.fromstring(val, sep=' ')
@@ -409,61 +355,6 @@ class Kitti_util(Kitti):
         else:
             raise ValueError("Please input x,y,z's min, max range(m) based on velodyne coordinates. ")
 
-    def __surround_view(self, points, depth):
-        """ convert coordinates for panoramic image """
-
-        # upload current points
-        self.__points_filter(points)
-        # project point cloud to 2D point map
-        x_img = np.arctan2(-self.__y, self.__x) / (self.__h_res * (np.pi / 180))
-        y_img = -(np.arctan2(self.__z, self.__d) / (self.__v_res * (np.pi / 180)))
-        # filter in range points based on fov, x,y,z range setting
-
-        x_size = int(np.ceil((self.__h_fov[1] - self.__h_fov[0]) / self.__h_res))
-        y_size = int(np.ceil((self.__v_fov[1] - self.__v_fov[0]) / self.__v_res))
-        self.__get_sur_size = (x_size + 1, y_size + 1)
-
-        # shift negative points to positive points (shift minimum value to 0)
-        x_offset = self.__h_fov[0] / self.__h_res
-        x_img = np.trunc(x_img - x_offset).astype(np.int32)
-        y_offset = self.__v_fov[1] / self.__v_res
-        y_fine_tune = 1
-        y_img = np.trunc(y_img + y_offset + y_fine_tune).astype(np.int32)
-        dist = self.__normalize_data(self.__d, min=0, max=120, scale=255, depth=depth)
-
-        # array to img
-        img = np.zeros([y_size + 1, x_size + 1], dtype=np.uint8)
-        img[y_img, x_img] = dist
-        return img
-
-    def __topview(self, points, scale):
-        """ convert coordinates for top-view (bird's eye view) image """
-
-        # filter in range points based on fov, x,y,z range setting
-        self.__points_filter(points)
-
-        x_size = int(np.ceil(self.__y_range[1] - self.__y_range[0]))
-        y_size = int(np.ceil(self.__x_range[1] - self.__x_range[0]))
-        self.__get_sur_size = (x_size * scale + 1, y_size * scale + 1)
-
-        # convert 3D lidar coordinates(vehicle coordinates) to 2D image coordinates
-        # Velodyne coordinates info : http://www.cvlibs.net/publications/Geiger2013IJRR.pdf
-        # scale - for high resolution
-        x_img = -(self.__y * scale).astype(np.int32)
-        y_img = -(self.__x * scale).astype(np.int32)
-
-        # shift negative points to positive points (shift minimum value to 0)
-        x_img += int(np.trunc(self.__y_range[1] * scale))
-        y_img += int(np.trunc(self.__x_range[1] * scale))
-
-        # normalize distance value & convert to depth map
-        max_dist = np.sqrt((max(self.__x_range) ** 2) + (max(self.__y_range) ** 2))
-        dist_lim = self.__normalize_data(self.__d, min=0, max=max_dist, scale=255, depth=True)
-        # array to img
-        img = np.zeros([y_size * scale + 1, x_size * scale + 1], dtype=np.uint8)
-        img[y_img, x_img] = dist_lim
-        return img
-
     def __velo_2_img_projection(self, points):
         """ convert velodyne coordinates to camera image coordinates """
 
@@ -531,65 +422,6 @@ class Kitti_util(Kitti):
 
         return ans, c_
 
-    def velo_2_pano(self, h_fov=None, v_fov=None, x_range=None, y_range=None, z_range=None, depth=False):
-        """ panoramic image for whole velo dataset """
-
-        self.__v_fov, self.__h_fov = v_fov, h_fov
-        self.__x_range, self.__y_range, self.__z_range = x_range, y_range, z_range
-
-        velo_gen = self.velo_file
-        if velo_gen is None:
-            raise ValueError("Velo data is not included in this class")
-        for points in velo_gen:
-            res = self.__surround_view(points, depth)
-            yield res
-
-    def velo_2_pano_frame(self, h_fov=None, v_fov=None, x_range=None, y_range=None, z_range=None, depth=False):
-        """ panoramic image for one frame """
-
-        self.__v_fov, self.__h_fov = v_fov, h_fov
-        self.__x_range, self.__y_range, self.__z_range = x_range, y_range, z_range
-
-        velo_gen = self.velo_file
-        if velo_gen is None:
-            raise ValueError("Velo data is not included in this class")
-        res = self.__surround_view(velo_gen, depth)
-        return res
-
-    def velo_2_topview(self, h_fov=None, v_fov=None, x_range=None, y_range=None, z_range=None, scale=10):
-        """ Top-view(Bird's eye view) image for whole velo dataset """
-
-        self.__v_fov, self.__h_fov = v_fov, h_fov
-        self.__x_range, self.__y_range, self.__z_range = x_range, y_range, z_range
-
-        if scale <= 0:
-            raise ValueError("scale value must be positive. default value is 10.")
-        elif float(scale).is_integer() is False:
-            scale = round(scale)
-
-        velo_gen = self.velo_file
-        if velo_gen is None:
-            raise ValueError("Velo data is not included in this class")
-        for points in velo_gen:
-            res = self.__topview(points, scale)
-            yield res
-
-    def velo_2_topview_frame(self, h_fov=None, v_fov=None, x_range=None, y_range=None, z_range=None, scale=10):
-        """ Top-view(Bird's eye view) image for one frame """
-        self.__v_fov, self.__h_fov = v_fov, h_fov
-        self.__x_range, self.__y_range, self.__z_range = x_range, y_range, z_range
-
-        if scale <= 0:
-            raise ValueError("scale value must be positive. default value is 10.")
-        elif float(scale).is_integer() is False:
-            scale = round(scale)
-
-        velo_gen = self.velo_file
-        if velo_gen is None:
-            raise ValueError("Velo data is not included in this class")
-        res = self.__topview(velo_gen, scale)
-        return res
-
     def velo_projection(self, h_fov=None, v_fov=None, x_range=None, y_range=None, z_range=None):
         """ print velodyne 3D points corresponding to camera 2D image """
 
@@ -621,155 +453,5 @@ class Kitti_util(Kitti):
 
     def __del__(self):
         pass
- 
-def print_projection_cv2(points, color, image):
-    """ project converted velodyne points into camera image """
-    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    for i in range(points.shape[1]):
-        cv2.circle(hsv_image, (np.int32(points[0][i]), np.int32(points[1][i])), 2, (np.int(color[i]), 255, 255), -1)
-
-    return cv2.cvtColor(hsv_image, cv2.COLOR_HSV2BGR)
-
-def print_projection_plt(points, color, image):
-    """ project converted velodyne points into camera image """
-    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    for i in range(points.shape[1]):
-        cv2.circle(hsv_image, (int(points[0][i]), int(points[1][i])), 2, (int(color[i]), 255, 255), -1)
-
-    return cv2.cvtColor(hsv_image, cv2.COLOR_HSV2RGB)
-
-def pano_example1():
-    """ save one frame image about velodyne dataset converted to panoramic image  """
-    velo_path = './velodyne_points/data'
-    v_fov, h_fov = (-10.5, 2.0), (-60, 80)
-    velo = Kitti_util(frame=89, velo_path=velo_path)
-
-    frame = velo.velo_2_pano_frame(h_fov, v_fov, depth=False)
-
-    cv2.imshow('panoramic result', frame)
-    cv2.waitKey(0)
-
-def pano_example2():
-    """ save video about velodyne dataset converted to panoramic image  """
-    velo_path = './velodyne_points/data'
-    v_fov, h_fov = (-24.9, 2.0), (-180, 160)
-
-    velo2 = Kitti_util(frame='all', velo_path=velo_path)
-    pano = velo2.velo_2_pano(h_fov, v_fov, depth=False)
-
-    velo = Kitti_util(frame=0, velo_path=velo_path)
-    velo.velo_2_pano_frame(h_fov, v_fov, depth=False)
-    size = velo.surround_size
-
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    vid = cv2.VideoWriter('pano_result.avi', fourcc, 25.0, size, False)
-
-    for frame in pano:
-        vid.write(frame)
-
-    print('video saved')
-    vid.release()
-
-def topview_example1():
-    """ save one frame image about velodyne dataset converted to topview image  """
-    velo_path = './velodyne_points/data'
-    x_range, y_range, z_range = (-15, 15), (-10, 10), (-2, 2)
-    velo = Kitti_util(frame=89, velo_path=velo_path)
-
-    frame = velo.velo_2_topview_frame(x_range=x_range, y_range=y_range, z_range=z_range)
-
-    cv2.imshow('panoramic result', frame)
-    cv2.waitKey(0)
-
-def topview_example2():
-    """ save video about velodyne dataset converted to topview image  """
-    velo_path = './velodyne_points/data'
-    x_range, y_range, z_range, scale = (-20, 20), (-20, 20), (-2, 2), 10
-    size = (int((max(y_range) - min(y_range)) * scale), int((max(x_range) - min(x_range)) * scale))
-
-    velo2 = Kitti_util(frame='all', velo_path=velo_path)
-    topview = velo2.velo_2_topview(x_range=x_range, y_range=y_range, z_range=z_range, scale=scale)
-
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    vid = cv2.VideoWriter('topview_result.avi', fourcc, 25.0, size, False)
-
-    for frame in topview:
-        vid.write(frame)
-
-    print('video saved')
-    vid.release()
-
-def projection_example1():
-    """ save one frame about projecting velodyne points into camera image """
-    image_type = 'gray'  # 'gray' or 'color' image
-    mode = '00' if image_type == 'gray' else '02'  # image_00 = 'graye image' , image_02 = 'color image'
-
-    image_path = 'image_' + mode + '/data'
-    velo_path = './velodyne_points/data'
-
-    v_fov, h_fov = (-24.9, 2.0), (-90, 90)
-
-    v2c_filepath = './calib_velo_to_cam.txt'
-    c2c_filepath = './calib_cam_to_cam.txt'
-
-    res = Kitti_util(frame=89, camera_path=image_path, velo_path=velo_path, \
-                    v2c_path=v2c_filepath, c2c_path=c2c_filepath)
-
-    img, pnt, c_ = res.velo_projection_frame(v_fov=v_fov, h_fov=h_fov)
-
-    result = print_projection_cv2(pnt, c_, img)
-
-    cv2.imshow('projection result', result)
-    cv2.waitKey(0)
-
-def projection_example2():
-    """ save video about projecting velodyne points into camera image """
-    image_type = 'gray'  # 'gray' or 'color' image
-    mode = '00' if image_type == 'gray' else '02'  # image_00 = 'graye image' , image_02 = 'color image'
-
-    image_path = 'image_' + mode + '/data'
-
-    velo_path = './velodyne_points/data'
-    v_fov, h_fov = (-24.9, 2.0), (-90, 90)
-
-    v2c_filepath = './calib_velo_to_cam.txt'
-    c2c_filepath = './calib_cam_to_cam.txt'
-
-    temp = Kitti(frame=0, camera_path=image_path)
-    img = temp.camera_file
-    size = (img.shape[1], img.shape[0])
-
-    """ save result video """
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    vid = cv2.VideoWriter('projection_result.avi', fourcc, 25.0, size)
-    test = Kitti_util(frame='all', camera_path=image_path, velo_path=velo_path, \
-                      v2c_path=v2c_filepath, c2c_path=c2c_filepath)
-
-    res = test.velo_projection(v_fov=v_fov, h_fov=h_fov)
-
-    for frame, point, cc in res:
-        image = print_projection_cv2(point, cc, frame)
-        vid.write(image)
-
-    print('video saved')
-    vid.release()
-
-def xml_example():
-
-    xml_path = "./tracklet_labels.xml"
-    xml_check = Kitti_util(xml_path=xml_path)
-
-    tracklet_, type_ = xml_check.tracklet_info
-    print(tracklet_[0])
-
-if __name__ == "__main__":
-
-    # pano_example1()
-    # pano_example2()
-    topview_example1()
-    # topview_example2()
-    # projection_example1()
-    # projection_example2()
 

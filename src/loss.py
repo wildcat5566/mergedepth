@@ -8,7 +8,6 @@ def gt_loss(ref, dots):
         for j in range(dots.shape[1]):
             if dots[i][j]:
                 pt += 1
-                gs = int(abs(ref[i][j] - dots[i][j]))
                 loss += (ref[i][j] - dots[i][j])**2
                 
     return round(loss / pt, 4)
