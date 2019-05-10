@@ -2,11 +2,15 @@ import numpy as np
 from numpy.linalg import multi_dot, inv
 
 def gt_loss(ref, dots):
-
-    dev = np.multiply((ref - dots), dots.astype(bool))
-    loss = np.sum(np.multiply(dev, dev)) / np.sum(dots.astype(bool))
+    loss = 0
+    pt = 0
+    for i in range(dots.shape[0]):
+        for j in range(dots.shape[1]):
+            if dots[i][j]:
+                pt += 1
+                loss += (ref[i][j] - dots[i][j])**2
                 
-    return round(loss, 4)
+    return round(loss / pt, 4)
             
 class Reconstruction():
     def __init__(self, date):
@@ -166,17 +170,21 @@ class Reconstruction():
         return canvas
     
     def _recon_loss(self, tar, syn):
+        loss = 0
+        pt = 0
         if np.amax(tar)<=1.0: 
             tar = (np.dot(tar,255)).astype(int) #Normalize [0.0, 1.0] --> [0, 255]
             
         syn = syn.astype(int)
-        
-        dev = np.multiply((tar - syn), syn.astype(bool)) / 255
-        loss = np.sum(np.multiply(dev, dev))/ np.sum(syn.astype(bool))
-        if(np.sum(syn.astype(bool))==0):
-            print("warn")
+        for y in range(tar.shape[0]):
+            for x in range(tar.shape[1]): #~460k points
+                if sum(syn[y][x]) > 1:
+                    pt += 1
+                    loss += ( (tar[y][x][0]-syn[y][x][0])**2
+                             +(tar[y][x][1]-syn[y][x][1])**2
+                             +(tar[y][x][2]-syn[y][x][2])**2)
 
-        return round(loss, 6)
+        return round(loss / pt, 4)
     
     #Public function
     def compute_loss(self, depth_map, src_image, tar_image, direction):

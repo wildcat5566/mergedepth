@@ -85,7 +85,7 @@ class Upconv(nn.Module):
 class Network(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=0, bias=False)
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=0, bias=True)
         self.batchnorm1 = nn.BatchNorm2d(64)
         self.maxpool1 = nn.MaxPool2d(3, stride=2, padding=1)
         
@@ -112,7 +112,7 @@ class Network(nn.Module):
         #residual blocks 15-16
         self.res15 = ResidualType1(2048)
         self.res16 = ResidualType1(2048)
-        self.conv2 = nn.Conv2d(in_channels=2048, out_channels=1024, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv2 = nn.Conv2d(in_channels=2048, out_channels=1024, kernel_size=1, stride=1, padding=0, bias=True)
         self.batchnorm2 = nn.BatchNorm2d(1024)
         
         #upproject
@@ -131,7 +131,8 @@ class Network(nn.Module):
         self.upconv_r3 = Upconv(256,128)
         self.up4 = Upproject(128,64)
         
-        self.conv3 = nn.Conv2d(in_channels=64, out_channels=1, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=1, kernel_size=3, stride=1, padding=1, bias=True)
+        #self.conv3.bias.data.fill_(.5)
         
     def forward(self, x):
         x = F.relu(self.batchnorm1(self.conv1(x))) #torch.Size([n, 64, 192, 640])
@@ -176,6 +177,7 @@ class Network(nn.Module):
         s = self.upconv_r3(r3_out)
         x = self.up4(x + s) #torch.Size([n, 64, 192, 640])
 
-        x = self.conv3(x) #torch.Size([n, 1, 192, 640])
+        #x = self.conv3(x)
+        x = F.sigmoid(self.conv3(x)) #torch.Size([n, 1, 192, 640])
 
         return x
