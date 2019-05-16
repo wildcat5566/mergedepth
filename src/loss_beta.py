@@ -2,19 +2,16 @@ import numpy as np
 from numpy.linalg import multi_dot, inv
 
 def gt_loss(ref, dots):
-    loss = 0
-    pt = 0
-    for i in range(dots.shape[0]):
-        for j in range(dots.shape[1]):
-            if dots[i][j]:
-                pt += 1
-                loss += (ref[i][j] - dots[i][j])**2
+
+    dev = np.multiply((ref - dots), dots.astype(bool))
+    loss =  np.sum(np.multiply(dev, dev)) / np.sum(dots.astype(bool))
                 
-    return round(loss / pt, 4)
+    return round(loss, 4)
             
 class Reconstruction():
-    def __init__(self, date):
+    def __init__(self, date, scaling=1):
         self.date = date
+        self.scaling = scaling
         self.K2R2_K3 = None
         self.K3R3C3 = None
         self.K3R3_K2 = None
@@ -125,71 +122,63 @@ class Reconstruction():
 
         #L2R
         dR = np.eye(3) #No rotation
+        
+        #Dollhouse scaling
+        self.K3 = self.K3 * self.scaling
+        self.K2 = self.K2 * self.scaling
+        self.K3[2][2] = 1
+        self.K2[2][2] = 1
+        self.t2 = self.t2 * self.scaling
+        self.t3 = self.t3 * self.scaling
+        
         self.K3R3_K2 = multi_dot([self.K3, dR, inv(self.K2)])
         self.K3R3C3 = multi_dot([self.K3, dR, (self.t2 - self.t3)])
 
         #R2L
         self.K2R2_K3 = multi_dot([self.K2, dR, inv(self.K3)])
         self.K2R2C2 = multi_dot([self.K2, dR, (self.t3 - self.t2)])
+        
+    ######Numpy versions######
             
     def _remap(self, p2, Zw, direction):
         if direction == 'L2R':
             p3 = np.dot(self.K3R3_K2, Zw*p2) - self.K3R3C3
-            return [float(p3[0] / p3[2]), float(p3[1] / p3[2])]
+            return [int(p3[0] / p3[2]), int(p3[1] / p3[2])]
         elif direction == 'R2L':
             p3 = np.dot(self.K2R2_K3, Zw*p2) - self.K2R2C2
-            return [float(p3[0] / p3[2]), float(p3[1] / p3[2])]
+            return [int(p3[0] / p3[2]), int(p3[1] / p3[2])]
 
     def _reconstruct(self, depth_map, src_image, direction):
-        #Bind original pixels with depth maps
-        depths = []
-        colors = []
+
+        canvas = np.zeros_like(src_image, dtype=np.uint8)
+        if np.amax(src_image) <= 1.0:
+            src_image = np.dot(src_image, 255).astype(int)
+            
         for x in range(src_image.shape[1]): #width
             for y in range(src_image.shape[0]):
-                depths.append([x,y,depth_map[y][x]])
-                colors.append(src_image[y][x])
+                p3_x, p3_y = self._remap(p2=np.array([[x], [y], [1]]), 
+                                         Zw = depth_map[y][x], direction=direction)
+                if(0 <= p3_x < src_image.shape[1] and 0 <= p3_y < src_image.shape[0]):
+                    canvas[p3_y][p3_x] = src_image[y][x]
 
-        #remap pixel positions to complementary view (2-D)
-        px, py = [], []
-        for [x,y,z] in depths:     
-            p3_x, p3_y = self._remap(p2=np.array([[x],[y],[1]]), Zw=z, direction=direction)
-            px.append(int(p3_x))
-            py.append(int(p3_y))
-
-        #map original color of source image pixels
-        if np.amax(colors)<=1.0:
-            colors = np.dot(np.array(colors), 255).astype(int) #Normalize [0.0, 1.0] --> [0, 255]
-            
-        canvas = np.zeros_like(src_image, dtype=np.uint8)
-        for i in range(len(px)):
-            if(0 <= px[i] < src_image.shape[1] and 0 <= py[i] < src_image.shape[0]):
-                canvas[py[i]][px[i]][0] = colors[i][0]
-                canvas[py[i]][px[i]][1] = colors[i][1]
-                canvas[py[i]][px[i]][2] = colors[i][2]
-        
         return canvas
     
     def _recon_loss(self, tar, syn):
-        loss = 0
-        pt = 0
         if np.amax(tar)<=1.0: 
-            tar = (np.dot(tar,255)).astype(int) #Normalize [0.0, 1.0] --> [0, 255]
-            
-        syn = syn.astype(int)
-        for y in range(tar.shape[0]):
-            for x in range(tar.shape[1]): #~460k points
-                if sum(syn[y][x]) > 1:
-                    pt += 1
-                    loss += ( (tar[y][x][0]-syn[y][x][0])**2
-                             +(tar[y][x][1]-syn[y][x][1])**2
-                             +(tar[y][x][2]-syn[y][x][2])**2)
+            tar = (np.dot(tar,255)) #Normalize [0.0, 1.0] --> [0, 255]
+        tar = tar.astype(float)
+        syn = syn.astype(float)
+        
+        dev = (tar - syn) / 255
+        loss = np.sum(np.multiply(dev, dev)) / (tar.shape[0]*tar.shape[1])
 
-        return round(loss / pt, 4)
+        return round(loss, 6)
     
     #Public function
     def compute_loss(self, depth_map, src_image, tar_image, direction):
         
         syn_image = self._reconstruct(depth_map=depth_map, src_image=src_image, direction=direction)
         loss = self._recon_loss(tar=tar_image, syn=syn_image)
+        
         return loss, syn_image
     

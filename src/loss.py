@@ -1,16 +1,19 @@
 import numpy as np
 from numpy.linalg import multi_dot, inv
+import torch
+import cv2
 
 def gt_loss(ref, dots):
 
-    dev = np.multiply((ref - dots), dots.astype(bool))
-    loss = np.sum(np.multiply(dev, dev)) / np.sum(dots.astype(bool))
+    dev = (ref - dots) * ((dots!=0).float()) #double
+    loss = torch.sum(torch.mul(dev, dev)) / (torch.sum((dots!=0).float()))
                 
-    return round(loss, 4)
+    return loss
             
 class Reconstruction():
-    def __init__(self, date):
+    def __init__(self, date, scaling=1):
         self.date = date
+        self.scaling = scaling
         self.K2R2_K3 = None
         self.K3R3C3 = None
         self.K3R3_K2 = None
@@ -119,6 +122,16 @@ class Reconstruction():
                                 [ 5.991982e-03],
                                 [-3.215069e-03]])
 
+        
+        
+        #Dollhouse scaling
+        self.K3 = self.K3 * self.scaling
+        self.K2 = self.K2 * self.scaling
+        self.K3[2][2] = 1
+        self.K2[2][2] = 1
+        self.t2 = self.t2 * self.scaling
+        self.t3 = self.t3 * self.scaling
+        
         #L2R
         dR = np.eye(3) #No rotation
         self.K3R3_K2 = multi_dot([self.K3, dR, inv(self.K2)])
@@ -127,61 +140,153 @@ class Reconstruction():
         #R2L
         self.K2R2_K3 = multi_dot([self.K2, dR, inv(self.K3)])
         self.K2R2C2 = multi_dot([self.K2, dR, (self.t3 - self.t2)])
-            
+        
+        #cuda
+        self.K3R3_K2 = torch.tensor(self.K3R3_K2).float().cuda()
+        self.K2R2_K3 = torch.tensor(self.K2R2_K3).float().cuda()
+        self.K3R3C3 = torch.tensor(self.K3R3C3).float().cuda()
+        self.K2R2C2 = torch.tensor(self.K2R2C2).float().cuda()
+        
     def _remap(self, p2, Zw, direction):
+        """
+        {Inputs}
+        p2       : Pixel location of interested point in source image (Homogeneous).
+        dims     : 3*1
+        val&type : [[0,w], [0,h], [1]], dtype=torch.floatTensor
+        
+        Zw       : Predicted depth of interested point in source image.
+        dims     : 1
+        val&type : [0, 1], dtype=torch.floatTensor
+        
+        direction: Flag, indicating transformation direction between left & right views.
+        dims     : None
+        val&type : 'L2R' or 'R2L', dtype=string
+        
+        {Outputs}
+        [x, y]   : Mapped location of interested point to target view.
+        dims     : 1*2
+        val&type : [[0,w], [0,h]]
+        """
+        #print(2, Zw.requires_grad)
+        p2 = p2.float().cuda()
+        m2 = (Zw*p2)
+        #print(3, m2.requires_grad)
+        
         if direction == 'L2R':
-            p3 = np.dot(self.K3R3_K2, Zw*p2) - self.K3R3C3
-            return [float(p3[0] / p3[2]), float(p3[1] / p3[2])]
+            m1 = self.K3R3_K2#torch.tensor(self.K3R3_K2).float().cuda()
+            p3 = torch.mm(m1, m2) - self.K3R3C3#torch.tensor(self.K3R3C3).float().cuda()
+            #print(4, p3.requires_grad)
+            return [(p3[0]/p3[2]).long(),
+                    (p3[1]/p3[2]).long()]
+            
         elif direction == 'R2L':
-            p3 = np.dot(self.K2R2_K3, Zw*p2) - self.K2R2C2
-            return [float(p3[0] / p3[2]), float(p3[1] / p3[2])]
+            m1 = torch.tensor(self.K2R2_K3).float().cuda()
+            p3 = torch.mm(m1, m2) - torch.tensor(self.K2R2C2).float().cuda()
 
-    def _reconstruct(self, depth_map, src_image, direction):
-        #Bind original pixels with depth maps
-        depths = []
-        colors = []
-        for x in range(src_image.shape[1]): #width
-            for y in range(src_image.shape[0]):
-                depths.append([x,y,depth_map[y][x]])
-                colors.append(src_image[y][x])
-
-        #remap pixel positions to complementary view (2-D)
-        px, py = [], []
-        for [x,y,z] in depths:     
-            p3_x, p3_y = self._remap(p2=np.array([[x],[y],[1]]), Zw=z, direction=direction)
-            px.append(int(p3_x))
-            py.append(int(p3_y))
-
-        #map original color of source image pixels
-        if np.amax(colors)<=1.0:
-            colors = np.dot(np.array(colors), 255).astype(int) #Normalize [0.0, 1.0] --> [0, 255]
-            
-        canvas = np.zeros_like(src_image, dtype=np.uint8)
-        for i in range(len(px)):
-            if(0 <= px[i] < src_image.shape[1] and 0 <= py[i] < src_image.shape[0]):
-                canvas[py[i]][px[i]][0] = colors[i][0]
-                canvas[py[i]][px[i]][1] = colors[i][1]
-                canvas[py[i]][px[i]][2] = colors[i][2]
-        
-        return canvas
+            return [(p3[0]/p3[2]).long(),
+                    (p3[1]/p3[2]).long()]
     
-    def _recon_loss(self, tar, syn):
-        if np.amax(tar)<=1.0: 
-            tar = (np.dot(tar,255)).astype(int) #Normalize [0.0, 1.0] --> [0, 255]
-            
-        syn = syn.astype(int)
+    def _reconstruct(self, depth_map, src_image, direction, max_depth=120.0):
+        """
+        {Inputs}
+        depth_map: Depth map prediction generated by NN.
+        dims     : 1*h*w
+        val&type : [0, 1], dtype=torch.FloatTensor
         
-        dev = np.multiply((tar - syn), syn.astype(bool)) / 255
-        loss = np.sum(np.multiply(dev, dev))/ np.sum(syn.astype(bool))
-        if(np.sum(syn.astype(bool))==0):
-            print("warn")
+        src_image: Reconstruction source view.
+        dims     : 3*H*W
+        val&type : [0, 1], dtype=torch.floatTensor
+        
+        direction: Flag, indicating transformation direction between left & right views.
+        dims     : None
+        val&type : 'L2R' or 'R2L', dtype=string
+        
+        max_depth: Max depth (of ground truth data), for scaling
+        dims     : 1
+        val&type : 120.0 / scale
+        
+        {outputs}
+        canvas   : Reconstructed complementary view of src_image.
+        dims     : 3*h*w 
+        val&type : [0, 1], dtype=torch.floatTensor
+        """
+        
+        #Only resize source image
+        src_np = np.transpose(src_image.cpu().numpy(), (1,2,0))
+        src_np = cv2.resize(src_np, (depth_map.shape[2], depth_map.shape[1]))#3,96,320
+        src_resize = torch.tensor(np.transpose(src_np, (2,0,1))).float().cuda()
 
-        return round(loss, 6)
+        canvas = torch.zeros(src_resize.shape).float().cuda()
+        
+        for x in range(src_resize.shape[2]): #width
+            for y in range(src_resize.shape[1]):
+                ptz = torch.tensor(depth_map[0][y][x], requires_grad=True)
+                scale = torch.tensor((max_depth*self.scaling), requires_grad=True).cuda()
+                p3_x, p3_y = self._remap(p2=torch.tensor([[x], [y], [1]]), 
+                                         Zw=torch.tensor(ptz * scale),
+                                         direction=direction)
+
+                xloc, yloc = int(p3_x.cpu().numpy()), int(p3_y.cpu().numpy())
+
+                if(0 <= xloc < src_resize.shape[2] and 0 <= yloc < src_resize.shape[1]):
+                    canvas[0][yloc][xloc] = src_resize[0][y][x]
+                    canvas[1][yloc][xloc] = src_resize[1][y][x]
+                    canvas[2][yloc][xloc] = src_resize[2][y][x]
+
+        return canvas
+
+    def _recon_loss(self, tar, syn):
+        """
+        {Inputs}
+        tar      : Reconstruction target view.
+        dims     : 3*H*W
+        val&type : [0, 1], dtype=torch.FloatTensor
+        
+        syn      : Reconstructed complementary view of src_image.
+        dims     : 3*h*w 
+        val&type : [0, 1], dtype=torch.floatTensor
+        
+        {Outputs}
+        loss     : Alignment loss between original & synthesized target view.
+        dims     : 1
+        val&type : [0, 1], dtype=torch.floatTensor
+        
+        """
+
+        tar_np = np.transpose(tar.cpu().numpy(), (1,2,0))
+        tar_np = cv2.resize(tar_np, (syn.shape[2], syn.shape[1]))
+        tar = torch.tensor(np.transpose(tar_np, (2,0,1))).float().cuda()
+
+        dev = (tar - syn)
+        loss = torch.sum(dev*dev) / (tar.shape[2]*tar.shape[1])
+        
+        return loss
     
     #Public function
     def compute_loss(self, depth_map, src_image, tar_image, direction):
+        """
+        h*w =  96*320
+        H*W = 197*645
         
+        {Inputs}
+        depth_map: Depth map prediction generated by NN.
+        dims     : 1*h*w
+        val&type : [0, 1], dtype=torch.FloatTensor
+        
+        src_image: Reconstruction source view.
+        dims     : 3*H*W
+        val&type : [0, 1], dtype=torch.FloatTensor
+        
+        tar_image: Reconstruction target view.
+        dims     : 3*H*W
+        val&type : [0, 1], dtype=torch.FloatTensor
+        
+        direction: Flag, indicating transformation direction between left & right views.
+        dims     : None
+        val&type : 'L2R' or 'R2L', dtype=string
+        """
+
         syn_image = self._reconstruct(depth_map=depth_map, src_image=src_image, direction=direction)
         loss = self._recon_loss(tar=tar_image, syn=syn_image)
+        
         return loss, syn_image
-    
