@@ -50,6 +50,7 @@ class Network(nn.Module):
 
         #Decoder
         self.conv2 = nn.Conv2d(in_channels=2048, out_channels=1024, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv2_drop = nn.Dropout2d(p=0.25) ######
         self.batchnorm2 = nn.BatchNorm2d(1024)
         
         self.upconv1 = Upconv(1024,1024)
@@ -68,6 +69,7 @@ class Network(nn.Module):
         self.up4 = Upproject(128,64)
         
         self.conv3 = nn.Conv2d(in_channels=64, out_channels=1, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv3_drop = nn.Dropout2d(p=0.25) ######
         
     def hook(self, module, input, output):
         self.skip_outputs.append(output)
@@ -76,7 +78,7 @@ class Network(nn.Module):
         self.skip_outputs = [] #clear every time
 
         x = self.encoder(x)
-        x = F.relu(self.batchnorm2(self.conv2(x))) #torch.Size([n, 1024, 12, 40])
+        x = F.relu(self.batchnorm2(self.conv2_drop(self.conv2(x)))) #torch.Size([n, 1024, 12, 40])
 
         x = self.upconv1(x)
         x = self.up1(x) #torch.Size([n, 512, 24, 80])
@@ -93,6 +95,6 @@ class Network(nn.Module):
         s = self.upconv_skip4(self.skip_outputs[0])
         x = self.up4(x + s) #torch.Size([n, 64, 192, 640])
 
-        x = F.sigmoid(self.conv3(x)) #torch.Size([n, 1, 192, 640])
+        x = F.sigmoid(self.conv3_drop(self.conv3(x))) #torch.Size([n, 1, 192, 640]) #-3~+2 approximately without sigmoid
         return x
     
