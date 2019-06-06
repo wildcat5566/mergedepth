@@ -2,8 +2,11 @@
 
 data/
 models/
+inference/
+train/
+train2/
+
+sandbox.ipynb
 .ipynb_checkpoints/
 src/__pycache__/
-sandbox-Copy1.ipynb
-sandbox-Copy2.ipynb
-sandbox-Copy3.ipynb
+
