@@ -37,6 +37,28 @@ def config():
     args = parser.parse_args()
     return args
 
+def msg_format(args):
+    msg = "Epochs: \t{} \nLearning Rate: \t{} \nBatch Size: \t{} \
+    \n\nSupervised loss weight (alpha): \t\t{} \
+    \nReconstruction loss weight (beta): \t\t{} \t(mask: {}) \
+    \nDepth map consistency loss weight (gamma): \t{} \t(mask: {})".format(args.epochs, args.lr, args.batch_size,
+                                                                           args.alpha, 
+                                                                           args.beta, args.r_mask, 
+                                                                           args.gamma, args.c_mask)
+        
+    if args.image_output_dir is not None:
+        msg+=("\n\nSave imgs (during training progress) to: " + args.image_output_dir)
+    else:
+        msg+=("\n\nNot saving imgs while training.")
+        
+    if args.model_output_dir is not None:
+        msg+=("\nSave right view model to: \t" + os.path.join(args.model_output_dir, 'right.pth'))
+        msg+=("\nSave left view model to: \t" + os.path.join(args.model_output_dir, 'left.pth'))
+    else:
+        msg+=("\nNot saving model.")
+        
+    return msg
+
 def create_datasets(batch_size, num_workers=6, train_frac=0.6, valid_frac=0.2):
     kitti_ds = KittiStereoLidar(
         im_left_dir=glob.glob("data/left_imgs/*/*"), 
@@ -156,27 +178,24 @@ def main():
     
     print("Hello! May the force be with you!")
     print("------Argument Configurations------")
-    print("Epochs: \t{}".format(args.epochs))
-    print("Learning Rate: \t{}".format(args.lr))
-    print("Batch Size: \t{}".format(args.batch_size))
-    
-    print("Supervised loss weight (alpha): \t\t{}".format(args.alpha))
-    print("Reconstruction loss weight (beta): \t\t{} \t(mask: {})".format(args.beta, args.r_mask))
-    print("Depth map consistency loss weight (gamma): \t{} \t(mask: {})".format(args.gamma, args.c_mask))
+    settings = msg_format(args)
+    print(settings)
 
-    if args.image_output_dir is not None:
-        print("Save imgs (during training progress) to: " + args.image_output_dir)
+    if args.model_output_dir:
+        settings_fname = os.path.join(args.model_output_dir, 'settings.txt')
+    elif args.image_output_dir:
+        settings_fname = os.path.join(args.image_output_dir, 'settings.txt')
     else:
-        print("Not saving imgs while training.")
+        settings_fname = 'settings.txt'
         
-    if args.model_output_dir is not None:
-        print("Save right view model to: " + os.path.join(args.model_output_dir, 'right.pth'))
-        print("Save left view model to: " + os.path.join(args.model_output_dir, 'left.pth'))
-    else:
-        print("Not saving model.")
+    print("\n------Write training settings to {}------".format(settings_fname))
+    with open(settings_fname, "w") as text_file:
+        print(settings, file=text_file)
+        
+    text_file.close()
 
     train_loader, valid_loader, test_loader = create_datasets(batch_size=args.batch_size)
-    print("------Create subsets------")
+    print("\n------Create subsets------")
     print("# Training samples: \t{}".format(len(train_loader) * args.batch_size))
     print("# Validation samples: \t{}".format(len(valid_loader) * args.batch_size))
     print("# Test samples: \t{}".format(len(test_loader) * args.batch_size))
@@ -195,7 +214,7 @@ def main():
             Consistency(date='2011_10_03',scaling=sc)]
 
     # Depth prediction networks for left & right view sets respectively
-    print("------Create networks & optimizers------")
+    print("\n------Create networks & optimizers------")
     L = Network()
     L = torch.nn.DataParallel(L).cuda()
     L_optimizer = torch.optim.Adam(L.parameters(), lr=args.lr)
@@ -206,7 +225,7 @@ def main():
 
     L.train()
     R.train()
-    print("------Start training------")
+    print("\n------Start training------")
 
     for epoch in range(args.epochs):
         train_loss = 0.0
@@ -307,12 +326,12 @@ def main():
             round(time_elapsed, 4)
         ))
 
-    print("------Finished training------")
+    print("\n------Finish training------")
     if args.model_output_dir is not None:
         save_model(R, os.path.join(args.model_output_dir, 'right.pth'))
         save_model(L, os.path.join(args.model_output_dir, 'left.pth'))
-        print("------Finished saving models------")
-    
+        print("\n------Finish saving models------")
+
     return
 
 if __name__ == "__main__":
