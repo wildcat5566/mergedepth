@@ -260,7 +260,6 @@ class Reconstruction():
         val&type : [0, 1], dtype=torch.floatTensor
         
         """
-
         tar_np = np.transpose(tar.cpu().numpy(), (1,2,0))
         tar_np = cv2.resize(tar_np, (syn.shape[2], syn.shape[1]))
         tar = torch.tensor(np.transpose(tar_np, (2,0,1))).float().cuda()
@@ -287,7 +286,7 @@ class Reconstruction():
         val&type : [0, 1], dtype=torch.floatTensor
         
         """
-
+        
         tar_np = np.transpose(tar.cpu().numpy(), (1,2,0))
         tar_np = cv2.resize(tar_np, (syn.shape[2], syn.shape[1]))
         tar = torch.tensor(np.transpose(tar_np, (2,0,1))).float().cuda()
@@ -339,18 +338,21 @@ class Reconstruction():
             loss = self._recon_loss(tar=tar_image, syn=syn_image)
         else:
             loss = self._recon_loss_weighted(tar=tar_image, syn=syn_image)
-        return loss, syn_image
+        return loss
 
 ##########
 class Consistency():
-    def __init__(self, date, scaling=1):
+    def __init__(self, date, scaling=1, device=0):
         self.date = date
         self.scaling = scaling
+        self.device = device
+        
         self.K2R2_K3 = None
         self.K3R3C3 = None
         self.K3R3_K2 = None
         self.K2R2C2 = None
         self._get_transformations()
+        
         
     def _get_transformations(self):
         if self.date=='2011_09_26':
@@ -468,11 +470,11 @@ class Consistency():
         self.K2R2_K3 = multi_dot([self.K2, dR, inv(self.K3)])
         self.K2R2C2 = multi_dot([self.K2, dR, (self.t3 - self.t2)])
         #cuda
-        self.K3R3_K2 = torch.tensor(self.K3R3_K2).float().cuda()
-        self.K2R2_K3 = torch.tensor(self.K2R2_K3).float().cuda()
-        self.K3R3C3 = torch.tensor(self.K3R3C3).float().cuda()
-        self.K2R2C2 = torch.tensor(self.K2R2C2).float().cuda()
-        
+        self.K3R3_K2 = torch.tensor(self.K3R3_K2).float().cuda(self.device)
+        self.K2R2_K3 = torch.tensor(self.K2R2_K3).float().cuda(self.device)
+        self.K3R3C3 = torch.tensor(self.K3R3C3).float().cuda(self.device)
+        self.K2R2C2 = torch.tensor(self.K2R2C2).float().cuda(self.device)
+
     def _remap(self, p2, Zw, direction):
         """
         {Inputs}
@@ -494,8 +496,8 @@ class Consistency():
         val&type : [[0,w], [0,h]]
         """
         
-        p2 = p2.float().cuda()
-        m2 = (Zw*p2)
+        p2 = p2.float().cuda(self.device)
+        m2 = (Zw.cuda(self.device)*p2)
         
         if direction == 'L2R':
             m1 = self.K3R3_K2
@@ -503,8 +505,8 @@ class Consistency():
             return (p3[0]/p3[2]).long(), (p3[1]/p3[2]).long()
             
         elif direction == 'R2L':
-            m1 = torch.tensor(self.K2R2_K3).float().cuda()
-            p3 = torch.mm(m1, m2) - torch.tensor(self.K2R2C2).float().cuda()
+            m1 = torch.tensor(self.K2R2_K3).float().cuda(self.device)
+            p3 = torch.mm(m1, m2) - torch.tensor(self.K2R2C2).float().cuda(self.device)
             return (p3[0]/p3[2]).long(), (p3[1]/p3[2]).long()
     
     def _reconstruct(self, depth_map, direction, depth_max=120.0):
@@ -528,18 +530,13 @@ class Consistency():
         val&type : [0, 1], dtype=torch.floatTensor
         """
         
-        #Only resize source image
-        src_cl = depth_map.clone() #src_image.clone()
-        src_np = np.transpose(src_cl.cpu().detach().numpy().squeeze())
-        src_np = cv2.resize(src_np, (depth_map.shape[2], depth_map.shape[1]))#3,96,320
-        src = torch.tensor(src_np).unsqueeze(0).float().cuda()
-        
+        src = depth_map.clone()
         canvas = depth_map.clone()
         
         for x in range(depth_map.shape[2]): #width
             for y in range(depth_map.shape[1]):
-                ptz = torch.tensor(depth_map[0][y][x]).float()
-                scale = torch.tensor(depth_max*self.scaling).cuda()
+                ptz = torch.tensor(depth_map[0][y][x]).float().cuda(self.device)
+                scale = torch.tensor(depth_max*self.scaling).cuda(self.device)
                 p3_x, p3_y = self._remap(p2=torch.tensor([[x], [y], [1]]), 
                                          Zw=torch.tensor(ptz * scale),
                                          direction=direction)
@@ -554,7 +551,7 @@ class Consistency():
         """
         {Inputs}
         tar      : Reconstruction target view.
-        dims     : 1*H*W --> 1*h*w
+        dims     : 1*h*w
         val&type : [0, 1], dtype=torch.FloatTensor
         
         syn      : Reconstructed complementary view of depth_map.
@@ -567,13 +564,8 @@ class Consistency():
         val&type : [0, 1], dtype=torch.floatTensor
         
         """
-        
-        tar_cl = tar.clone()
-        tar_np = np.transpose(tar_cl.cpu().detach().numpy().squeeze())
-        tar_np = cv2.resize(tar_np, (syn.shape[2], syn.shape[1]))
-        tar = torch.tensor(tar_np).unsqueeze(0).float().cuda()
 
-        dev = (tar_cl - syn.float())
+        dev = (tar.float() - syn.float())
         loss = torch.sum(dev*dev) / (tar.shape[2]*tar.shape[1])
         
         return loss
@@ -582,7 +574,7 @@ class Consistency():
         """
         {Inputs}
         tar      : Reconstruction target view.
-        dims     : 1*H*W --> 1*h*w
+        dims     : 1*h*w
         val&type : [0, 1], dtype=torch.FloatTensor
         
         syn      : Reconstructed complementary view of depth_map.
@@ -595,16 +587,11 @@ class Consistency():
         val&type : [0, 1], dtype=torch.floatTensor
         
         """
-        
-        tar_cl = tar.clone()
-        tar_np = np.transpose(tar_cl.cpu().detach().numpy().squeeze())
-        tar_np = cv2.resize(tar_np, (syn.shape[2], syn.shape[1]))
-        tar = torch.tensor(tar_np).unsqueeze(0).float().cuda()
 
         m = np.transpose([[np.exp(1-y/tar.shape[1])-1 for y in range(tar.shape[1])] for x in range(tar.shape[2])])
-        mask = torch.tensor(m).float().cuda().unsqueeze(0)
+        mask = torch.tensor(m).float().cuda(self.device).unsqueeze(0)
 
-        dev = (tar_cl - syn.float())
+        dev = (tar.float() - syn.float()) #tar_cl
         loss = torch.sum(mask*(dev*dev)) / (tar.shape[2]*tar.shape[1])
         
         return loss
@@ -612,15 +599,14 @@ class Consistency():
     def compute_loss(self, depth_map, tar_image, direction, weighting=False):
         """
         h*w =  96*320
-        H*W = 192*640
         
         {Inputs}
         depth_map: Depth map prediction generated by NN. Also serving as "mapping source".
         dims     : 1*h*w
         val&type : [0, 1], dtype=torch.FloatTensor
         
-        tar_image: Reconstruction target view.
-        dims     : 1*H*W
+        tar_image: Predicted depth map of other view. Serving as target view.
+        dims     : 1*h*w
         val&type : [0, 1], dtype=torch.FloatTensor
         
         direction: Flag, indicating transformation direction between left & right views.
@@ -636,11 +622,16 @@ class Consistency():
         dims     : 1
         val&type : [0, 1], dtype=torch.floatTensor
         """
-        #syn_image = self._reconstruct(depth_map=depth_map, src_image=src_image, direction=direction)
+        depth_map = depth_map.cuda(self.device)
+        tar_image = tar_image.cuda(self.device)
+
         syn_image = self._reconstruct(depth_map=depth_map, direction=direction)
         if weighting==False:
             loss = self._recon_loss(tar=tar_image, syn=syn_image)
         else:
             loss = self._recon_loss_weighted(tar=tar_image, syn=syn_image)
-        return loss, syn_image
+            
+        #back to main gpu
+        loss = loss.cuda(0)
+        return loss
     
