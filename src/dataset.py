@@ -3,9 +3,11 @@ import torchvision.transforms as transforms
 from torch.utils.data import Dataset
 from PIL import Image
 import cv2
+import numpy as np
 
-class KittiStereoLidar(Dataset):
-    def __init__(self, im_left_dir, im_right_dir, gt_left_dir, gt_right_dir, transform=None):
+class KittiTrain(Dataset):
+    def __init__(self, im_left_dir, im_right_dir, gt_left_dir, gt_right_dir, \
+                 transform=None, augmentation=True):
         self.im_left_dir = im_left_dir
         self.im_right_dir = im_right_dir
         self.gt_left_dir = gt_left_dir
@@ -16,7 +18,8 @@ class KittiStereoLidar(Dataset):
         self.gt_left_dir.sort()
         self.gt_right_dir.sort()
         
-        self.transform = transform 
+        self.transform = transform
+        self.augmentation = augmentation
         
     def __getitem__(self, index):
         iml = Image.open(self.im_left_dir[index])
@@ -27,8 +30,34 @@ class KittiStereoLidar(Dataset):
         if self.transform:
             iml = self.transform(iml)
             imr = self.transform(imr)
+            
+        if self.augmentation:
+            iml = self.augmentation_color_space(iml)
+            iml = self.augmentation_gaussian_noise(iml)
+
+            imr = self.augmentation_color_space(imr)
+            imr = self.augmentation_gaussian_noise(imr)
 
         return iml, imr, gtl, gtr
+
+    def augmentation_gaussian_noise(self, img, mag=0.5, p=0.2): #3*h*w
+        r = np.random.random()
+        if r < p:
+            img += (mag * torch.rand(3, img.shape[1], img.shape[2]))
+            img = img / (1 + mag)
+        return img
+    
+    def augmentation_color_space(self, img, p=0.2):
+        r = np.random.random()
+        if r < p:
+            newimg = img * 0
+            direction = np.random.randint(1,3)
+            newimg[0,:,:] = img[(0+direction)%3,:,:]
+            newimg[1,:,:] = img[(1+direction)%3,:,:]
+            newimg[2,:,:] = img[(2+direction)%3,:,:]
+            return newimg
+        else:
+            return img
     
     def __len__(self):
         return len(self.im_left_dir)

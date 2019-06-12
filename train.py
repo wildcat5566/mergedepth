@@ -18,15 +18,17 @@ from src.dataset import *
 
 def config():
     parser = ArgumentParser()
-    parser.add_argument('--epochs',      type=int,   default=5,     required=True, help='Epochs for training')
-    parser.add_argument('--lr',          type=float, default=1e-3,  required=True, help='set learning rate')
-    parser.add_argument('--batch_size',  type=int,   default=8,                    help='set batch size')
-    parser.add_argument('--print_every', type=int,   default=5,                    help='print loss per _ batches')
-    parser.add_argument('--fullscale',   type=int,   default=0,                    help='True when training large model')
+    parser.add_argument('--epochs',       type=int,   default=5,    required=True, help='Epochs for training')
+    parser.add_argument('--lr',           type=float, default=1e-3, required=True, help='set learning rate')
+    parser.add_argument('--batch_size',   type=int,   default=8,                   help='set batch size')
+    parser.add_argument('--print_every',  type=int,   default=5,                   help='print loss per _ batches')
+    parser.add_argument('--augmentation', type=int,   default=1,                   help='Augment data')
+    parser.add_argument('--fullscale',    type=int,   default=0,                   help='True when training large model')
     
-    parser.add_argument('--alpha', type=float, default=1.0, help='set SUPERVISED loss weight')
-    parser.add_argument('--beta',  type=float, default=.01, help='set L-R RECONSTRUCTION loss weight')
-    parser.add_argument('--gamma', type=float, default=.01, help='set DEPTH MAP CONSISTENCY loss weight')
+    parser.add_argument('--alpha', type=float, default=1.0,   help='set SUPERVISED loss weight')
+    parser.add_argument('--beta',  type=float, default=.01,   help='set L-R RECONSTRUCTION loss weight')
+    parser.add_argument('--gamma', type=float, default=.01,   help='set DEPTH MAP CONSISTENCY loss weight')
+    parser.add_argument('--reg',   type=float, default=1e-8,  help='set WEIGHT REGULARIZATION loss factor')
 
     parser.add_argument('--r_mask', type=bool, default=True,  help='add weight mask to reconstruction loss')
     parser.add_argument('--c_mask', type=bool, default=False, help='add weight mask to consistency loss')
@@ -40,12 +42,13 @@ def config():
     return args
 
 def msg_format(args):
-    msg = "Epochs: \t{} \nLearning Rate: \t{} \nBatch Size: \t{} \nFullscale Model: \t{} \
+    msg = "Epochs: \t{} \nLearning Rate: \t{} \nBatch Size: \t{} \nAugmentation: \t{} \nFullscale Model: \t{} \
     \n\nSupervised loss weight (alpha): \t\t{} \
     \nReconstruction loss weight (beta): \t\t{} \t(mask: {}) \
-    \nDepth map consistency loss weight (gamma): \t{} \t(mask: {})".format(
-        args.epochs, args.lr, args.batch_size, args.fullscale,
-        args.alpha, args.beta, args.r_mask, args.gamma, args.c_mask)
+    \nDepth map consistency loss weight (gamma): \t{} \t(mask: {}) \
+    \nWeight regularization loss factor: \t\t{}".format(
+        args.epochs, args.lr, args.batch_size, args.augmentation, args.fullscale,
+        args.alpha, args.beta, args.r_mask, args.gamma, args.c_mask, args.reg)
         
     if args.image_output_dir is not None:
         msg+=("\n\nSave imgs (during training progress) to: " + args.image_output_dir)
@@ -60,14 +63,17 @@ def msg_format(args):
         
     return msg
 
-def create_datasets(batch_size, num_workers=6, train_frac=0.2):
-    kitti_ds = KittiStereoLidar(
+def create_datasets(batch_size, augmentation, train_frac=0.1, num_workers=6):
+    
+    kitti_ds = KittiTrain(
         im_left_dir=glob.glob( "data/left_imgs/*/*"), 
         im_right_dir=glob.glob("data/right_imgs/*/*"),
         gt_left_dir=glob.glob( "data/left_gt/*/*"), 
         gt_right_dir=glob.glob("data/right_gt/*/*"),
-        transform=transforms.Compose([transforms.Resize((192,640)),
-                                      transforms.ToTensor()])
+        transform = transforms.Compose([transforms.Resize((192,640)), 
+                                        transforms.RandomGrayscale(p=augmentation*0.2),
+                                        transforms.ToTensor()]),
+        augmentation=augmentation
     )
     
     indices = list(range(len(kitti_ds)))
@@ -159,6 +165,14 @@ def get_con_loss(functions, depth_maps, tar_imgs, direction, dates, batch_size, 
 
     return batch_loss / batch_size
 
+def get_reg_loss(model, factor):
+    l1_crit = nn.L1Loss(size_average=False)
+    reg_loss = 0.0
+    for param in model.parameters():
+        reg_loss += l1_crit(param, target=torch.zeros_like(param).cuda())
+
+    return(factor * reg_loss)
+
 def save_model(model, save_path):
     torch.save(model.state_dict(), save_path)
 
@@ -188,7 +202,7 @@ def main():
     args = config()
     
     print("Hello! May the force be with you!")
-    print("------Argument Configurations------")
+    print("------Argument configurations------")
     settings = msg_format(args)
     print(settings)
 
@@ -202,10 +216,10 @@ def main():
     print("\n------Write training settings to {}------".format(settings_fname))
     with open(settings_fname, "w") as text_file:
         print(settings, file=text_file)
-        
     text_file.close()
 
-    train_loader, valid_loader, test_loader = create_datasets(batch_size=args.batch_size)
+    train_loader, valid_loader, test_loader = create_datasets(batch_size=args.batch_size, 
+                                                              augmentation=args.augmentation)
     print("\n------Create subsets------")
     print("# Training samples: \t{}".format(len(train_loader) * args.batch_size))
     print("# Validation samples: \t{}".format(len(valid_loader) * args.batch_size))
@@ -294,11 +308,15 @@ def main():
                                     tar_imgs=depths_l, 
                                     direction='R2L', dates=drive_dates, 
                                     batch_size=args.batch_size, weighting=args.c_mask)
+            
+            # Weights regularization loss
+            reg_loss = get_reg_loss(L, factor=args.reg) + get_reg_loss(R, factor=args.reg)
         
             # Weight & sum losses
             loss = (args.alpha*(s_loss_L + s_loss_R) \
                   + args.beta *(r_loss_L + r_loss_R) \
-                  + args.gamma*(c_loss_L + c_loss_R)) / (2*(args.alpha + args.beta + args.gamma))
+                  + args.gamma*(c_loss_L + c_loss_R) \
+                  + reg_loss) / (2*(args.alpha + args.beta + args.gamma))
 
             # Back propagation & optimize
             loss.backward()
@@ -312,19 +330,21 @@ def main():
         
             step_loss = train_loss / (batch_count * args.batch_size)
             if batch_count % args.print_every == 0:
-                print('Epoch: {} ({:.2f}%)\tStep Loss: {:.6f} \n\tSu: {:.6f} \tUnsu: {:.6f} \tCon: {:.6f}'.format(
+                print('Epoch: {} ({:.2f}%)\tStep Loss: {:.6f} \
+                       \n\tSu: {:.6f} \tUnsu: {:.6f} \tCon: {:.6f} \tReg: {:.6f}'.format(
                     epoch+1,
                     100*(batch_count / len(train_loader)), 
                     step_loss,
                     s_step / (batch_count * args.batch_size),
                     r_step / (batch_count * args.batch_size),
-                    c_step / (batch_count * args.batch_size)
+                    c_step / (batch_count * args.batch_size),
+                    reg_loss
                 ))
 
                 if args.image_output_dir is not None:
-                    tempname='L_epoch_'+str(epoch)+'_'+str(sample_count)+'.jpg'
+                    tempname='L_epoch_'+str(epoch+1)+'_'+str(sample_count)+'.jpg'
                     save_image(pti=images_l[0], ptd=depths_l[0], tempname=tempname, save_path=args.image_output_dir)
-                    tempname='R_epoch_'+str(epoch)+'_'+str(sample_count)+'.jpg'
+                    tempname='R_epoch_'+str(epoch+1)+'_'+str(sample_count)+'.jpg'
                     save_image(pti=images_r[0], ptd=depths_r[0], tempname=tempname, save_path=args.image_output_dir)
 
                 sample_count += 1
