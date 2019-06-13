@@ -47,17 +47,12 @@ class KittiTrain(Dataset):
             img = img / (1 + mag)
         return img
     
-    def augmentation_color_space(self, img, p=0.2):
+    def augmentation_color_space(self, img, p=0.2): #randomly remove 1 color channel
         r = np.random.random()
         if r < p:
-            newimg = img * 0
-            direction = np.random.randint(1,3)
-            newimg[0,:,:] = img[(0+direction)%3,:,:]
-            newimg[1,:,:] = img[(1+direction)%3,:,:]
-            newimg[2,:,:] = img[(2+direction)%3,:,:]
-            return newimg
-        else:
-            return img
+            z = np.random.randint(0,3)
+            img[z,:,:] *= 0
+        return img
     
     def __len__(self):
         return len(self.im_left_dir)
