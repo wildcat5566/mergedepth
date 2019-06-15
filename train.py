@@ -18,9 +18,11 @@ from src.dataset import *
 
 def config():
     parser = ArgumentParser()
-    parser.add_argument('--epochs',       type=int,   default=5,    required=True, help='Epochs for training')
-    parser.add_argument('--lr',           type=float, default=1e-3, required=True, help='set learning rate')
-    parser.add_argument('--lr_decay',     type=int,   default=1,                   help='decay learning rate')
+    parser.add_argument('--epochs',        type=int,   default=5,     required=True, help='Epochs for training')
+    parser.add_argument('--lr',            type=float, default=1e-3,  required=True, help='set learning rate')
+    parser.add_argument('--lr_decay',      type=int,   default=1,                    help='decay learning rate')
+    parser.add_argument('--lr_decay_rate', type=float, default=0.9,                  help='lr decay rate')
+    
     parser.add_argument('--batch_size',   type=int,   default=8,                   help='set batch size')
     parser.add_argument('--print_every',  type=int,   default=5,                   help='print loss per _ batches')
     
@@ -44,12 +46,13 @@ def config():
     return args
 
 def msg_format(args):
-    msg = "Epochs: \t{} \nLearning Rate: \t{} \t(decay: {}) \nBatch Size: \t{} \nAugmentation: \t{} \
+    msg = "Epochs: \t{} \nLearning Rate: \t{} \t(decay rate: {}) \nBatch Size: \t{} \nAugmentation: \t{} \
     \n\nSupervised loss weight (alpha): \t\t{} \
     \nReconstruction loss weight (beta): \t\t{} \t(mask: {}) \
     \nDepth map consistency loss weight (gamma): \t{} \t(mask: {}) \
     \nWeight regularization loss factor: \t\t{}".format(
-        args.epochs, args.lr, args.lr_decay, args.batch_size, args.augmentation, 
+        args.epochs, args.lr, args.lr_decay*args.lr_decay_rate, 
+        args.batch_size, args.augmentation, 
         args.alpha, args.beta, args.r_mask, args.gamma, args.c_mask, args.reg)
         
     if args.image_output_dir is not None:
@@ -175,8 +178,8 @@ def get_reg_loss(model, factor):
 
     return(factor * reg_loss)
 
-def adjust_learning_rate(optimizer, epoch, lr):
-    lr = lr * 0.95
+def adjust_learning_rate(optimizer, epoch, lr, lr_decay_rate):
+    lr = lr * lr_decay_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
         
@@ -270,7 +273,7 @@ def main():
         s_step, r_step, c_step = 0.0, 0.0, 0.0
 
         batch_count = 1
-        sample_count = 1
+        n = 1
         time_start = time.time()
 
         for images_l, images_r, scans_l, scans_r in train_loader:
@@ -285,10 +288,6 @@ def main():
             # Forward pass, make predictions
             depths_l = L(images_l) #sigmoided
             depths_r = R(images_r)
-            
-            #depths_l = (depths_l - depths_l.min()) / (depths_l.max() - depths_l.min()) #normalize
-            #depths_r = (depths_r - depths_r.min()) / (depths_r.max() - depths_r.min())
-
             drive_dates = [s[13:23] for s in scans_l]
         
             # Compute supervised (lidar) losses (device=0)
@@ -354,17 +353,17 @@ def main():
                 ))
 
                 if args.image_output_dir is not None:
-                    tempname = "L_epoch_{:02}_{:03}.jpg".format(epoch+1, sample_count)
+                    tempname = "L_epoch_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_image(pti=images_l[0], ptd=depths_l[0], tempname=tempname, save_path=args.image_output_dir)
-                    tempname = "R_epoch_{:02}_{:03}.jpg".format(epoch+1, sample_count)
+                    tempname = "R_epoch_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_image(pti=images_r[0], ptd=depths_r[0], tempname=tempname, save_path=args.image_output_dir)
-                sample_count += 1
+                n += 1
                 
             # adjust learning rate
             if args.lr_decay:
                 if batch_count%25 == 1 and batch_count>=50:
-                    args.lr = adjust_learning_rate(L_optimizer, epoch, args.lr)
-                    args.lr = adjust_learning_rate(R_optimizer, epoch, args.lr)
+                    args.lr = adjust_learning_rate(L_optimizer, epoch, args.lr, args.lr_decay_rate)
+                    args.lr = adjust_learning_rate(R_optimizer, epoch, args.lr, args.lr_decay_rate)
                     for param_group in L_optimizer.param_groups:
                         print("Adaptive learning rate:{:.6f}".format(param_group['lr']))
                 
