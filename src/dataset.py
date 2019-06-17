@@ -57,27 +57,19 @@ class KittiTrain(Dataset):
     def __len__(self):
         return len(self.im_left_dir)
     
-class KittiTest(Dataset):
-    def __init__(self, im_left_dir, im_right_dir, transform=None):
-        self.im_left_dir = im_left_dir
-        self.im_right_dir = im_right_dir
-
-        self.im_left_dir.sort()
-        self.im_right_dir.sort()
-
+class KittiTest(Dataset): #single view respectively
+    def __init__(self, im_dir, transform=None):
+        self.im_dir = im_dir
+        self.im_dir.sort()
         self.transform = transform 
         
     def __getitem__(self, index):
-        iml = Image.open(self.im_left_dir[index])
-        imr = Image.open(self.im_right_dir[index])
-        fileno = self.im_left_dir[index][-14:]
-
+        im = Image.open(self.im_dir[index])
+        fileno = self.im_dir[index][-14:]
         if self.transform:
-            iml = self.transform(iml)
-            imr = self.transform(imr)
-
-        return iml, imr, fileno
+            im = self.transform(im)
+        return im, fileno
     
     def __len__(self):
-        return len(self.im_left_dir)
+        return len(self.im_dir)
     

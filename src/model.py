@@ -41,7 +41,6 @@ class Decoder(nn.Module):
         self.n_layers = n_layers
         
         self.conv2 = nn.Conv2d(in_channels=2048, out_channels=1024, kernel_size=1, stride=1, padding=0, bias=False)
-        #self.conv2_drop = nn.Dropout2d(p=0.25)
         self.batchnorm2 = nn.BatchNorm2d(1024)
         
         self.upconv1 = Upconv(1024,1024)
@@ -66,8 +65,6 @@ class Decoder(nn.Module):
             self.upconv5 = Upconv(64,64)
             self.up5 = Upproject(64,32)
             self.conv3 = nn.Conv2d(in_channels=32, out_channels=1, kernel_size=3, stride=1, padding=1, bias=False)
-        
-        #self.conv3_drop = nn.Dropout2d(p=0.25)
     
     def forward(self, x, skip_outputs):
         x = F.relu(self.batchnorm2(self.conv2(x)))
@@ -90,8 +87,7 @@ class Decoder(nn.Module):
         if self.n_layers==5:
             x = self.upconv5(x)
             x = self.up5(x)
-        
-        #x = F.sigmoid(self.conv3_drop(self.conv3(x)))
+
         x = F.sigmoid(self.conv3(x))
         return x
     

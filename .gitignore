@@ -5,6 +5,7 @@ models/
 inference/
 train/
 
+train2.py
 sandbox.ipynb
 .ipynb_checkpoints/
 src/__pycache__/

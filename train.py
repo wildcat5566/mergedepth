@@ -178,7 +178,7 @@ def get_reg_loss(model, factor):
 
     return(factor * reg_loss)
 
-def adjust_learning_rate(optimizer, epoch, lr, lr_decay_rate):
+def adjust_learning_rate(optimizer, lr, lr_decay_rate):
     lr = lr * lr_decay_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
@@ -321,7 +321,7 @@ def main():
                                     batch_size=args.batch_size, weighting=args.c_mask)
             
             # Weights regularization loss
-            reg_loss = get_reg_loss(L, factor=args.reg) + get_reg_loss(R, factor=args.reg)
+            reg_loss = 0#get_reg_loss(L, factor=args.reg) + get_reg_loss(R, factor=args.reg)
         
             # Weight & sum losses
             loss = (args.alpha*(s_loss_L + s_loss_R) \
@@ -378,6 +378,7 @@ def main():
             round(time_elapsed, 4)
         ))
 
+    #adjust_learning_rate_here_every_epoch
     print("\n------Finish training------")
     if args.model_output_dir is not None:
         save_model(R, os.path.join(args.model_output_dir, 'right.pth'))
