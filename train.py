@@ -358,15 +358,7 @@ def main():
                     tempname = "R_epoch_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_image(pti=images_r[0], ptd=depths_r[0], tempname=tempname, save_path=args.image_output_dir)
                 n += 1
-                
-            # adjust learning rate
-            if args.lr_decay:
-                if batch_count%25 == 1 and batch_count>=50:
-                    args.lr = adjust_learning_rate(L_optimizer, epoch, args.lr, args.lr_decay_rate)
-                    args.lr = adjust_learning_rate(R_optimizer, epoch, args.lr, args.lr_decay_rate)
-                    for param_group in L_optimizer.param_groups:
-                        print("Adaptive learning rate:{:.6f}".format(param_group['lr']))
-                
+
             batch_count += 1
 
         # calculate average loss over an epoch
@@ -377,13 +369,23 @@ def main():
             train_loss,
             round(time_elapsed, 4)
         ))
+        #adjust learning rate after each epoch
+        if args.lr_decay:
+            args.lr = adjust_learning_rate(L_optimizer, epoch, args.lr, args.lr_decay_rate)
+            args.lr = adjust_learning_rate(R_optimizer, epoch, args.lr, args.lr_decay_rate)
+            for param_group in L_optimizer.param_groups:
+                print("Adaptive learning rate:{:.6f}".format(param_group['lr']))
+                
+        #save model after each epoch
+        if args.model_output_dir is not None:
+            fname = 'right_{:02}.pth'.format(epoch)
+            save_model(R, os.path.join(args.model_output_dir, fname))
+            fname = 'left_{:02}.pth'.format(epoch)
+            save_model(L, os.path.join(args.model_output_dir, fname))
+            print("\n------Finish saving models------")
 
     #adjust_learning_rate_here_every_epoch
-    print("\n------Finish training------")
-    if args.model_output_dir is not None:
-        save_model(R, os.path.join(args.model_output_dir, 'right.pth'))
-        save_model(L, os.path.join(args.model_output_dir, 'left.pth'))
-        print("\n------Finish saving models------")
+    print("\n------Finish training------")  
 
     return
 
