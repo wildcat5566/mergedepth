@@ -32,10 +32,7 @@ class KittiTrain(Dataset):
             imr = self.transform(imr)
             
         if self.augmentation:
-            iml = self.augmentation_color_space(iml)
             iml = self.augmentation_gaussian_noise(iml)
-
-            imr = self.augmentation_color_space(imr)
             imr = self.augmentation_gaussian_noise(imr)
 
         return iml, imr, gtl, gtr
@@ -45,13 +42,6 @@ class KittiTrain(Dataset):
         if r < p:
             img += (mag * torch.rand(3, img.shape[1], img.shape[2]))
             img = img / (1 + mag)
-        return img
-    
-    def augmentation_color_space(self, img, p=0.2): #randomly remove 1 color channel
-        r = np.random.random()
-        if r < p:
-            z = np.random.randint(0,3)
-            img[z,:,:] *= 0
         return img
     
     def __len__(self):

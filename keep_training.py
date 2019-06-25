@@ -19,7 +19,7 @@ from src.dataset import *
 def config():
     parser = ArgumentParser()
     parser.add_argument('--epochs',         type=int,   default=5,    help='Epochs for training')
-    parser.add_argument('--lr',             type=float, default=1e-3, help='set learning rate')
+    parser.add_argument('--lr',             type=float, default=1e-4, help='set learning rate')
     parser.add_argument('--lr_decay',       type=int,   default=1,    help='decay learning rate')
     parser.add_argument('--lr_decay_rate',  type=float, default=0.9,  help='lr decay rate')
     parser.add_argument('--lr_decay_every', type=int,   default=2,    help='decay lr n times per epoch')
@@ -27,15 +27,20 @@ def config():
     parser.add_argument('--batch_size',   type=int,   default=8, help='set batch size')
     parser.add_argument('--print_every',  type=int,   default=5, help='print loss per _ batches')
     
-    parser.add_argument('--augmentation', type=int,   default=1,    help='Augment data')
-    parser.add_argument('--fullscale',    type=int,   default=0,    help='True when training large model')
+    parser.add_argument('--augmentation', type=int,   default=1, help='Augment data')
+    parser.add_argument('--fullscale',    type=int,   default=0, help='True when training large model')
     parser.add_argument('--train_frac',   type=float, default=0.05, help='training set fraction')
-    
-    parser.add_argument('--alpha',  type=float, default=1.0, help='set SUPERVISED loss weight')
-    parser.add_argument('--gamma',  type=float, default=.01, help='set DEPTH MAP CONSISTENCY loss weight')
-    parser.add_argument('--reg',    type=float, default=0,   help='set WEIGHT REGULARIZATION loss factor')
-    parser.add_argument('--c_mask', type=int,   default=0,   help='add weight mask to consistency loss')
 
+    parser.add_argument('--beta',  type=float, default=.01,   help='set L-R RECONSTRUCTION loss weight')
+    parser.add_argument('--gamma', type=float, default=.01,   help='set DEPTH MAP CONSISTENCY loss weight')
+    parser.add_argument('--reg',   type=float, default=1e-8,  help='set WEIGHT REGULARIZATION loss factor')
+
+    parser.add_argument('--r_mask', type=bool, default=True,  help='add weight mask to reconstruction loss')
+    parser.add_argument('--c_mask', type=bool, default=False, help='add weight mask to consistency loss')
+
+    parser.add_argument('--l_model_pth', type=str, required=True, help='left pretrained')
+    parser.add_argument('--r_model_pth', type=str, required=True, help='right pretrained')
+    
     parser.add_argument('--image_output_dir', type=str, default=None, \
                         help='Save samples while training. Leave none if not needed')
     parser.add_argument('--model_output_dir', type=str, default=None, \
@@ -45,16 +50,19 @@ def config():
     return args
 
 def msg_format(args):
-    msg = "Epochs: \t{} \nLearning Rate: \t{} \t(decay rate: {}, decay {} times per epoch) \
+    msg = "Training Phase: 2  \
+    \nEpochs: \t{} \nLearning Rate: \t{} \t(decay rate: {}, decay {} times per epoch) \
     \nBatch Size: \t{} \nAugmentation: \t{} \
     \nTraining set fraction: \t{} \
-    \n\nSupervised loss weight (alpha): \t\t{} \
+    \nReconstruction loss weight (beta): \t\t{} \t(mask: {}) \
     \nDepth map consistency loss weight (gamma): \t{} \t(mask: {}) \
     \nWeight regularization loss factor: \t\t{}".format(
         args.epochs, args.lr, args.lr_decay*args.lr_decay_rate, args.lr_decay*args.lr_decay_every,
-        args.batch_size, args.augmentation, args.train_frac,
-        args.alpha, args.gamma, args.c_mask, args.reg)
+        args.batch_size, args.augmentation, args.train_frac, 
+        args.beta, args.r_mask, args.gamma, args.c_mask, args.reg)
         
+    msg+=("\nLeft model path: \t{} \nRight model path: \t{}".format(args.l_model_pth, args.r_model_pth))
+    
     if args.image_output_dir is not None:
         msg+=("\n\nSave imgs (during training progress) to: " + args.image_output_dir)
     else:
@@ -68,7 +76,7 @@ def msg_format(args):
         
     return msg
 
-def create_datasets(batch_size, augmentation, train_frac, num_workers=6): #0.05: ~1000 samples
+def create_datasets(batch_size, augmentation, train_frac, num_workers=6):
     
     kitti_ds = KittiTrain(
         im_left_dir=glob.glob( "data/left_imgs/*/*"), 
@@ -115,18 +123,29 @@ def create_datasets(batch_size, augmentation, train_frac, num_workers=6): #0.05:
                              num_workers=num_workers)
 
     return train_loader, valid_loader, test_loader
+    
+def normalize_prediction(map_input, scale=100):
+    M, m=np.amax(map_input), np.amin(map_input)
+    return (map_input - m)*(scale / (M-m))
 
-def get_su_loss(depth_maps, scan_files, batch_size):
+def get_recon_loss(functions, depth_maps, src_imgs, tar_imgs, direction, dates, batch_size, weighting):
     batch_loss = 0
-    batch_accuracy = 0
-    for[dep, scan_file] in zip(depth_maps, scan_files):
-        dots = np.load(scan_file) 
+    for[dep, src, tar, dat] in zip(depth_maps, src_imgs, tar_imgs, dates):
+        if dat=='2011_09_26':
+            f = functions[0]
+        elif dat=='2011_09_28':
+            f = functions[1]
+        elif dat=='2011_09_29':
+            f = functions[2]
+        elif dat=='2011_09_30':
+            f = functions[3]
+        elif dat=='2011_10_03':
+            f = functions[4]
 
-        sample_loss, sample_accuracy = gt_loss(dep, dots)
+        sample_loss, recon_img = f.compute_loss(dep, src, tar, direction, weighting=weighting, return_img=True)
         batch_loss += sample_loss
-        batch_accuracy += sample_accuracy
 
-    return batch_loss / batch_size, 1 - (batch_accuracy / batch_size)
+    return batch_loss / batch_size, recon_img
 
 # move to 2nd cuda device if training fullscale model
 def get_con_loss(functions, depth_maps, tar_imgs, direction, dates, batch_size, weighting):  
@@ -164,11 +183,14 @@ def adjust_learning_rate(optimizer, lr, lr_decay_rate):
         
     return lr
 
-def save_model(model, optimizer, save_path):
-    state = {'state_dict': model.state_dict(),
-             'optimizer': optimizer.state_dict()}
+def load_model(filename, model, optimizer):
+    checkpoint = torch.load(filename)
+    model.load_state_dict(checkpoint['state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    return model, optimizer
 
-    torch.save(state, save_path)
+def save_model(model, save_path):
+    torch.save(model.state_dict(), save_path)
 
 def save_image(pti, ptd, tempname, save_path, crop=True):
     # to numpy
@@ -189,6 +211,21 @@ def save_image(pti, ptd, tempname, save_path, crop=True):
         
     cat = np.concatenate((rgb, gray), axis=0) #horizontal
     cat = (cat*255).astype(np.uint8)
+    save_name = os.path.join(save_path, tempname)
+    cv2.imwrite(save_name, cat)
+    
+def save_recon_image(tar, pti, tempname, save_path):
+    # to numpy
+    rgb = np.transpose(pti.cpu().detach().numpy(), (1,2,0))
+    rgb = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    
+    tar = np.transpose(tar.cpu().detach().numpy(), (1,2,0))
+    tar = cv2.resize(tar, (rgb.shape[1], rgb.shape[0]))
+    tar = cv2.cvtColor(tar, cv2.COLOR_RGB2BGR)
+    
+    cat = np.concatenate((rgb, tar), axis=0) #horizontal
+    cat = (cat*255).astype(np.uint8)
+    
     save_name = os.path.join(save_path, tempname)
     cv2.imwrite(save_name, cat)
 
@@ -213,7 +250,7 @@ def main():
     text_file.close()
 
     train_loader, valid_loader, test_loader = create_datasets(batch_size=args.batch_size, 
-                                                              augmentation=args.augmentation, 
+                                                              augmentation=args.augmentation,
                                                               train_frac=args.train_frac)
     print("\n------Create subsets------")
     print("# Training samples: \t{}".format(len(train_loader) * args.batch_size))
@@ -221,34 +258,38 @@ def main():
     print("# Test samples: \t{}".format(len(test_loader) * args.batch_size))
 
     sc = 320/1242
+    recf = [Reconstruction(date='2011_09_26',scaling=sc), 
+            Reconstruction(date='2011_09_28',scaling=sc),
+            Reconstruction(date='2011_09_29',scaling=sc), 
+            Reconstruction(date='2011_09_30',scaling=sc),
+            Reconstruction(date='2011_10_03',scaling=sc)]
+
     conf = [Consistency(date='2011_09_26',scaling=sc,device=args.fullscale), 
             Consistency(date='2011_09_28',scaling=sc,device=args.fullscale),
             Consistency(date='2011_09_29',scaling=sc,device=args.fullscale), 
             Consistency(date='2011_09_30',scaling=sc,device=args.fullscale),
             Consistency(date='2011_10_03',scaling=sc,device=args.fullscale)]
 
-    print("\n------Create networks & optimizers------")
-    if args.fullscale == False: #Half scale model
-        L = Halfscale()
-        L = torch.nn.DataParallel(L).cuda()
-        R = Halfscale()
-        R = torch.nn.DataParallel(R).cuda()
-        
-    else: #Full scale model
-        L = Fullscale(split_gpus=True)
-        R = Fullscale(split_gpus=True)
-        
+    print('------Load models & optimizers------')
+    L = Halfscale()
+    L = torch.nn.DataParallel(L)
     L_optimizer = torch.optim.Adam(L.parameters(), lr=args.lr)
+    L, L_optimizer = load_model(args.l_model_pth, L, L_optimizer)
+    
+    R = Halfscale()
+    R = torch.nn.DataParallel(R)
     R_optimizer = torch.optim.Adam(R.parameters(), lr=args.lr)
+    R, R_optimizer = load_model(args.r_model_pth, R, R_optimizer)
 
     L.train()
     R.train()
     print("\n------Start training------")
 
     for epoch in range(args.epochs):
+        recon_img_L=None
+        recon_img_R=None
         train_loss = 0.0
-        s_step, c_step = 0.0, 0.0
-        a_step = 0.0
+        r_step, c_step = 0.0, 0.0
 
         batch_count = 1
         n = 1
@@ -267,13 +308,23 @@ def main():
             depths_l = L(images_l) #sigmoided
             depths_r = R(images_r)
             drive_dates = [s[13:23] for s in scans_l]
+            
+            # Compute reconstruction losses (device=0)
+            r_loss_L, recon_img_R = get_recon_loss(functions=recf,
+                                      depth_maps=depths_l, 
+                                      src_imgs=images_l, 
+                                      tar_imgs=images_r, 
+                                      direction='L2R', dates=drive_dates, 
+                                      batch_size=args.batch_size, weighting=args.r_mask)
+            r_loss_R, recon_img_L = get_recon_loss(functions=recf,
+                                      depth_maps=depths_r, 
+                                      src_imgs=images_l, 
+                                      tar_imgs=images_l, 
+                                      direction='R2L', dates=drive_dates, 
+                                      batch_size=args.batch_size, weighting=args.r_mask)
         
-            # Compute supervised (lidar) losses (device=0)
-            s_loss_L, s_acc_L = get_su_loss(depth_maps=depths_l, scan_files=scans_l, batch_size=args.batch_size)
-            s_loss_R, s_acc_R = get_su_loss(depth_maps=depths_r, scan_files=scans_r, batch_size=args.batch_size)
-
             # Compute depth map L-R consistency losses (device=1 on halfscale)
-            """c_loss_L = get_con_loss(functions=conf,
+            c_loss_L = get_con_loss(functions=conf,
                                     depth_maps=depths_l,  
                                     tar_imgs=depths_r, 
                                     direction='L2R', dates=drive_dates, 
@@ -282,20 +333,15 @@ def main():
                                     depth_maps=depths_r,  
                                     tar_imgs=depths_l, 
                                     direction='R2L', dates=drive_dates, 
-                                    batch_size=args.batch_size, weighting=args.c_mask)"""
+                                    batch_size=args.batch_size, weighting=args.c_mask)
             
-            c_loss_L = 0
-            c_loss_R = 0
-
-
             # Weights regularization loss
-            #reg_loss = get_reg_loss(L, factor=args.reg) + get_reg_loss(R, factor=args.reg)
+            reg_loss = 0#get_reg_loss(L, factor=args.reg) + get_reg_loss(R, factor=args.reg)
         
             # Weight & sum losses
-            # Losses are batch-normalized
-            loss = (args.alpha*(s_loss_L + s_loss_R) \
-                  + args.gamma*(c_loss_L + c_loss_R)) / (2*(args.alpha + args.gamma))
-
+            loss = (args.beta *(r_loss_L + r_loss_R) \
+                  + args.gamma*(c_loss_L + c_loss_R) \
+                  + reg_loss) / (2*(args.beta + args.gamma))
 
             # Back propagation & optimize
             loss.backward()
@@ -303,21 +349,19 @@ def main():
             R_optimizer.step()
 
             train_loss += loss.item()
-            step_loss = train_loss / batch_count
-            
-            s_step += ((s_loss_L.item() + s_loss_R.item()) / 2)
-            a_step += ((s_acc_L.item() + s_acc_R.item()) / 2)
-            c_step += 0#((c_loss_L.item() + c_loss_R.item()) / 2)
-            
+            r_step += (r_loss_L.item() + r_loss_R.item())
+            c_step += (c_loss_L.item() + c_loss_R.item())
+        
+            step_loss = train_loss / (batch_count * args.batch_size)
             if batch_count % args.print_every == 0:
                 print('Epoch: {} ({:.2f}%)\tStep Loss: {:.6f} \
-                       \n\tSu: {:.6f} \tAcc_loss: {:.6f} \tCon: {:.6f}'.format(
+                       \n\tUnsu: {:.6f} \tCon: {:.6f} \tReg: {:.6f}'.format(
                     epoch+1,
                     100*(batch_count / len(train_loader)), 
                     step_loss,
-                    s_step / batch_count,
-                    a_step / batch_count,
-                    c_step / batch_count
+                    r_step / (batch_count * args.batch_size),
+                    c_step / (batch_count * args.batch_size),
+                    reg_loss
                 ))
 
                 if args.image_output_dir is not None:
@@ -325,8 +369,16 @@ def main():
                     save_image(pti=images_l[0], ptd=depths_l[0], tempname=tempname, save_path=args.image_output_dir)
                     tempname = "R_epoch_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_image(pti=images_r[0], ptd=depths_r[0], tempname=tempname, save_path=args.image_output_dir)
-                n += 1    
-            
+                    
+                    tempname = "R_recon_{:02}_{:03}.jpg".format(epoch+1, n)
+                    save_recon_image(images_r[args.batch_size-1], recon_img_R, \
+                                     tempname=tempname, save_path=args.image_output_dir)
+                    tempname = "L_recon_{:02}_{:03}.jpg".format(epoch+1, n)
+                    save_recon_image(images_l[args.batch_size-1], recon_img_L, \
+                                     tempname=tempname, save_path=args.image_output_dir)
+                    
+                n += 1
+                
             # decay learning rate
             if batch_count % int(len(train_loader) / args.lr_decay_every) == int(len(train_loader) / args.lr_decay_every) - 1:
                 if args.lr_decay:
@@ -334,7 +386,6 @@ def main():
                     args.lr = adjust_learning_rate(R_optimizer, args.lr, args.lr_decay_rate)
                     for param_group in L_optimizer.param_groups:
                         print("Adaptive learning rate:{:.6f}".format(param_group['lr']))
-                        
             batch_count += 1
 
         # calculate average loss over an epoch
@@ -345,15 +396,17 @@ def main():
             train_loss,
             round(time_elapsed, 4)
         ))
-        
+                
+        #save model after each epoch
         if args.model_output_dir is not None:
-            fname = 'right_{:02}.pth'.format(epoch+1)
-            save_model(R, R_optimizer, os.path.join(args.model_output_dir, fname))
-            fname = 'left_{:02}.pth'.format(epoch+1)
-            save_model(L, L_optimizer, os.path.join(args.model_output_dir, fname))
+            fname = 'right_{:02}.pth'.format(epoch)
+            save_model(R, os.path.join(args.model_output_dir, fname))
+            fname = 'left_{:02}.pth'.format(epoch)
+            save_model(L, os.path.join(args.model_output_dir, fname))
             print("\n------Finish saving models------")
 
-    print("\n------Finish training------")
+    #adjust_learning_rate_here_every_epoch
+    print("\n------Finish training------")  
 
     return
 

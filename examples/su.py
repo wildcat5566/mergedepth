@@ -18,23 +18,19 @@ from src.dataset import *
 
 def config():
     parser = ArgumentParser()
-    parser.add_argument('--epochs',         type=int,   default=5,    help='Epochs for training')
-    parser.add_argument('--lr',             type=float, default=1e-3, help='set learning rate')
-    parser.add_argument('--lr_decay',       type=int,   default=1,    help='decay learning rate')
-    parser.add_argument('--lr_decay_rate',  type=float, default=0.9,  help='lr decay rate')
-    parser.add_argument('--lr_decay_every', type=int,   default=2,    help='decay lr n times per epoch')
+    parser.add_argument('--epochs',        type=int,   default=5,     required=True, help='Epochs for training')
+    parser.add_argument('--lr',            type=float, default=1e-3,  required=True, help='set learning rate')
+    parser.add_argument('--lr_decay',      type=int,   default=1,                    help='decay learning rate')
+    parser.add_argument('--lr_decay_rate', type=float, default=0.9,                  help='lr decay rate')
     
-    parser.add_argument('--batch_size',   type=int,   default=8, help='set batch size')
-    parser.add_argument('--print_every',  type=int,   default=5, help='print loss per _ batches')
+    parser.add_argument('--batch_size',   type=int,   default=8,                   help='set batch size')
+    parser.add_argument('--print_every',  type=int,   default=5,                   help='print loss per _ batches')
     
-    parser.add_argument('--augmentation', type=int,   default=1,    help='Augment data')
-    parser.add_argument('--fullscale',    type=int,   default=0,    help='True when training large model')
-    parser.add_argument('--train_frac',   type=float, default=0.05, help='training set fraction')
+    parser.add_argument('--augmentation', type=int,   default=1,                   help='Augment data')
+    parser.add_argument('--fullscale',    type=int,   default=0,                   help='True when training large model')
     
-    parser.add_argument('--alpha',  type=float, default=1.0, help='set SUPERVISED loss weight')
-    parser.add_argument('--gamma',  type=float, default=.01, help='set DEPTH MAP CONSISTENCY loss weight')
-    parser.add_argument('--reg',    type=float, default=0,   help='set WEIGHT REGULARIZATION loss factor')
-    parser.add_argument('--c_mask', type=int,   default=0,   help='add weight mask to consistency loss')
+    parser.add_argument('--alpha', type=float, default=1.0,   help='set SUPERVISED loss weight')
+    parser.add_argument('--reg',   type=float, default=0,  help='set WEIGHT REGULARIZATION loss factor')
 
     parser.add_argument('--image_output_dir', type=str, default=None, \
                         help='Save samples while training. Leave none if not needed')
@@ -45,15 +41,12 @@ def config():
     return args
 
 def msg_format(args):
-    msg = "Epochs: \t{} \nLearning Rate: \t{} \t(decay rate: {}, decay {} times per epoch) \
-    \nBatch Size: \t{} \nAugmentation: \t{} \
-    \nTraining set fraction: \t{} \
+    msg = "Epochs: \t{} \nLearning Rate: \t{} \t(decay rate: {}) \nBatch Size: \t{} \nAugmentation: \t{} \
     \n\nSupervised loss weight (alpha): \t\t{} \
-    \nDepth map consistency loss weight (gamma): \t{} \t(mask: {}) \
     \nWeight regularization loss factor: \t\t{}".format(
-        args.epochs, args.lr, args.lr_decay*args.lr_decay_rate, args.lr_decay*args.lr_decay_every,
-        args.batch_size, args.augmentation, args.train_frac,
-        args.alpha, args.gamma, args.c_mask, args.reg)
+        args.epochs, args.lr, args.lr_decay*args.lr_decay_rate, 
+        args.batch_size, args.augmentation, 
+        args.alpha, args.reg)
         
     if args.image_output_dir is not None:
         msg+=("\n\nSave imgs (during training progress) to: " + args.image_output_dir)
@@ -68,7 +61,7 @@ def msg_format(args):
         
     return msg
 
-def create_datasets(batch_size, augmentation, train_frac, num_workers=6): #0.05: ~1000 samples
+def create_datasets(batch_size, augmentation, train_frac=0.2, num_workers=6):
     
     kitti_ds = KittiTrain(
         im_left_dir=glob.glob( "data/left_imgs/*/*"), 
@@ -115,18 +108,20 @@ def create_datasets(batch_size, augmentation, train_frac, num_workers=6): #0.05:
                              num_workers=num_workers)
 
     return train_loader, valid_loader, test_loader
+    
+def normalize_prediction(map_input, scale=100):
+    M, m=np.amax(map_input), np.amin(map_input)
+    return (map_input - m)*(scale / (M-m))
 
 def get_su_loss(depth_maps, scan_files, batch_size):
     batch_loss = 0
-    batch_accuracy = 0
     for[dep, scan_file] in zip(depth_maps, scan_files):
         dots = np.load(scan_file) 
 
-        sample_loss, sample_accuracy = gt_loss(dep, dots)
+        sample_loss = gt_loss(dep, dots)
         batch_loss += sample_loss
-        batch_accuracy += sample_accuracy
 
-    return batch_loss / batch_size, 1 - (batch_accuracy / batch_size)
+    return batch_loss / batch_size
 
 # move to 2nd cuda device if training fullscale model
 def get_con_loss(functions, depth_maps, tar_imgs, direction, dates, batch_size, weighting):  
@@ -213,19 +208,11 @@ def main():
     text_file.close()
 
     train_loader, valid_loader, test_loader = create_datasets(batch_size=args.batch_size, 
-                                                              augmentation=args.augmentation, 
-                                                              train_frac=args.train_frac)
+                                                              augmentation=args.augmentation)
     print("\n------Create subsets------")
     print("# Training samples: \t{}".format(len(train_loader) * args.batch_size))
     print("# Validation samples: \t{}".format(len(valid_loader) * args.batch_size))
     print("# Test samples: \t{}".format(len(test_loader) * args.batch_size))
-
-    sc = 320/1242
-    conf = [Consistency(date='2011_09_26',scaling=sc,device=args.fullscale), 
-            Consistency(date='2011_09_28',scaling=sc,device=args.fullscale),
-            Consistency(date='2011_09_29',scaling=sc,device=args.fullscale), 
-            Consistency(date='2011_09_30',scaling=sc,device=args.fullscale),
-            Consistency(date='2011_10_03',scaling=sc,device=args.fullscale)]
 
     print("\n------Create networks & optimizers------")
     if args.fullscale == False: #Half scale model
@@ -247,9 +234,6 @@ def main():
 
     for epoch in range(args.epochs):
         train_loss = 0.0
-        s_step, c_step = 0.0, 0.0
-        a_step = 0.0
-
         batch_count = 1
         n = 1
         time_start = time.time()
@@ -269,33 +253,11 @@ def main():
             drive_dates = [s[13:23] for s in scans_l]
         
             # Compute supervised (lidar) losses (device=0)
-            s_loss_L, s_acc_L = get_su_loss(depth_maps=depths_l, scan_files=scans_l, batch_size=args.batch_size)
-            s_loss_R, s_acc_R = get_su_loss(depth_maps=depths_r, scan_files=scans_r, batch_size=args.batch_size)
+            s_loss_L = get_su_loss(depth_maps=depths_l, scan_files=scans_l, batch_size=args.batch_size)
+            s_loss_R = get_su_loss(depth_maps=depths_r, scan_files=scans_r, batch_size=args.batch_size)
 
-            # Compute depth map L-R consistency losses (device=1 on halfscale)
-            """c_loss_L = get_con_loss(functions=conf,
-                                    depth_maps=depths_l,  
-                                    tar_imgs=depths_r, 
-                                    direction='L2R', dates=drive_dates, 
-                                    batch_size=args.batch_size, weighting=args.c_mask)
-            c_loss_R = get_con_loss(functions=conf,
-                                    depth_maps=depths_r,  
-                                    tar_imgs=depths_l, 
-                                    direction='R2L', dates=drive_dates, 
-                                    batch_size=args.batch_size, weighting=args.c_mask)"""
-            
-            c_loss_L = 0
-            c_loss_R = 0
-
-
-            # Weights regularization loss
-            #reg_loss = get_reg_loss(L, factor=args.reg) + get_reg_loss(R, factor=args.reg)
-        
             # Weight & sum losses
-            # Losses are batch-normalized
-            loss = (args.alpha*(s_loss_L + s_loss_R) \
-                  + args.gamma*(c_loss_L + c_loss_R)) / (2*(args.alpha + args.gamma))
-
+            loss = (s_loss_L + s_loss_R)  / 2
 
             # Back propagation & optimize
             loss.backward()
@@ -303,21 +265,12 @@ def main():
             R_optimizer.step()
 
             train_loss += loss.item()
-            step_loss = train_loss / batch_count
-            
-            s_step += ((s_loss_L.item() + s_loss_R.item()) / 2)
-            a_step += ((s_acc_L.item() + s_acc_R.item()) / 2)
-            c_step += 0#((c_loss_L.item() + c_loss_R.item()) / 2)
-            
+            step_loss = train_loss / (batch_count * args.batch_size)
             if batch_count % args.print_every == 0:
-                print('Epoch: {} ({:.2f}%)\tStep Loss: {:.6f} \
-                       \n\tSu: {:.6f} \tAcc_loss: {:.6f} \tCon: {:.6f}'.format(
+                print('Epoch: {} ({:.2f}%)\tStep Loss: {:.6f}'.format(
                     epoch+1,
                     100*(batch_count / len(train_loader)), 
                     step_loss,
-                    s_step / batch_count,
-                    a_step / batch_count,
-                    c_step / batch_count
                 ))
 
                 if args.image_output_dir is not None:
@@ -325,16 +278,8 @@ def main():
                     save_image(pti=images_l[0], ptd=depths_l[0], tempname=tempname, save_path=args.image_output_dir)
                     tempname = "R_epoch_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_image(pti=images_r[0], ptd=depths_r[0], tempname=tempname, save_path=args.image_output_dir)
-                n += 1    
-            
-            # decay learning rate
-            if batch_count % int(len(train_loader) / args.lr_decay_every) == int(len(train_loader) / args.lr_decay_every) - 1:
-                if args.lr_decay:
-                    args.lr = adjust_learning_rate(L_optimizer, args.lr, args.lr_decay_rate)
-                    args.lr = adjust_learning_rate(R_optimizer, args.lr, args.lr_decay_rate)
-                    for param_group in L_optimizer.param_groups:
-                        print("Adaptive learning rate:{:.6f}".format(param_group['lr']))
-                        
+                n += 1
+
             batch_count += 1
 
         # calculate average loss over an epoch
@@ -345,6 +290,13 @@ def main():
             train_loss,
             round(time_elapsed, 4)
         ))
+        
+        #adjust learning rate after each epoch
+        if args.lr_decay:
+            args.lr = adjust_learning_rate(L_optimizer, args.lr, args.lr_decay_rate)
+            args.lr = adjust_learning_rate(R_optimizer, args.lr, args.lr_decay_rate)
+            for param_group in L_optimizer.param_groups:
+                print("Adaptive learning rate:{:.6f}".format(param_group['lr']))
         
         if args.model_output_dir is not None:
             fname = 'right_{:02}.pth'.format(epoch+1)
