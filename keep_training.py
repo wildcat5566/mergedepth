@@ -17,6 +17,13 @@ from src.model import *
 from src.dataset import *
 
 def config():
+    """
+    {Function}
+    Parse training arguments & configurations.
+    
+    {Outputs}
+    args: Argument parser containing a set of arguments.
+    """
     parser = ArgumentParser()
     parser.add_argument('--epochs',         type=int,   default=5,    help='Epochs for training')
     parser.add_argument('--lr',             type=float, default=1e-4, help='set learning rate')
@@ -50,11 +57,21 @@ def config():
     return args
 
 def msg_format(args):
+    """
+    {Function}
+    Format argument message for display & write to txt file.
+    
+    {Inputs}
+    args: Set of parsed training arguments
+    
+    {Outputs}
+    msg: Formatted message containing arguments.
+    """
     msg = "Training Phase: 2  \
     \nEpochs: \t{} \nLearning Rate: \t{} \t(decay rate: {}, decay {} times per epoch) \
     \nBatch Size: \t{} \nAugmentation: \t{} \
     \nTraining set fraction: \t{} \
-    \nReconstruction loss weight (beta): \t\t{} \t(mask: {}) \
+    \n\nReconstruction loss weight (beta): \t\t{} \t(mask: {}) \
     \nDepth map consistency loss weight (gamma): \t{} \t(mask: {}) \
     \nWeight regularization loss factor: \t\t{}".format(
         args.epochs, args.lr, args.lr_decay*args.lr_decay_rate, args.lr_decay*args.lr_decay_every,
@@ -77,7 +94,40 @@ def msg_format(args):
     return msg
 
 def create_datasets(batch_size, augmentation, train_frac, num_workers=6):
+    """
+    {Function}
+    Create subsets & dataloaders from training data.
+    h*w = 96*320
     
+    {Inputs}
+    batch_size  : size of each data batch
+    val&type    : default=8, dtype=int
+    
+    augmentation: augment data
+    val&type    : default=1(True), dtype=int
+    
+    train_frac  : specify fraction of entire dataset used to create training set.
+    val&type    : default=0.05 (~1000 samples), dtype=float
+    
+    {Outputs}
+    train_loader: Pytorch DataLoader of training subset. With specified size, batch_size & augmentation.
+    val&type:     PyTorch DataLoader
+    
+    valid_loader: Pytorch DataLoader of validation subset. Subset is 1/2 size of train_loader.
+    val&type:     PyTorch DataLoader
+    
+    test_loader : Pytorch DataLoader of training subset. Subset size is 1/10 size of train_loader.
+    val&type    : PyTorch DataLoader
+    
+    {Datasets}
+    images_l, images_r: Left & right view images
+    dims              : batch_size*3*h*w
+    val&type          : [0, 1], dtype=torch.FloatTensor
+    
+    scans_l, scans_r  : Left & right view lidar scan projection file paths
+    dims              : batch_size
+    val&type          : dtype=str
+    """
     kitti_ds = KittiTrain(
         im_left_dir=glob.glob( "data/left_imgs/*/*"), 
         im_right_dir=glob.glob("data/right_imgs/*/*"),
@@ -123,12 +173,50 @@ def create_datasets(batch_size, augmentation, train_frac, num_workers=6):
                              num_workers=num_workers)
 
     return train_loader, valid_loader, test_loader
-    
-def normalize_prediction(map_input, scale=100):
-    M, m=np.amax(map_input), np.amin(map_input)
-    return (map_input - m)*(scale / (M-m))
 
 def get_recon_loss(functions, depth_maps, src_imgs, tar_imgs, direction, dates, batch_size, weighting):
+    """
+    {Function}
+    Get L-R reconstruction loss from predicted depth map and target image.
+    H*W = 192*640
+    h*w = 96*320
+    
+    {Inputs}
+    functions : pixel-wise mapping functions defined in loss.py
+    
+    depth_maps: Predicted depth maps.
+    dims      : batch_size*1*h*w
+    val&type  : [0, 1], dtype=torch.FloatTensor
+    
+    src_imgs  : Source image to be mapped from.
+    dims      : batch_size*3*H*W
+    val&type  : [0, 1], dtype=torch.FloatTensor
+    
+    tar_imgs  : Target image of complementary view.
+    dims      : batch_size*3*H*W
+    val&type  : [0, 1], dtype=torch.FloatTensor
+    
+    direction : View transforming direction.
+    dims      : 1
+    val&type  : 'L2R' or 'R2L', dtype=str
+    
+    dates     : Dataset dates, used to match camera calibration parameters.
+    dims      : 1
+    val&type  : dtype=str
+    
+    batch_size
+    dims      : 1
+    val&type  : default=8, dtype=int
+    
+    weighting : Use weighting mask in loss function or not.
+    dims      : 1
+    val&type  : default=False(args.c_mask=0), dtype=int
+    
+    {Outputs}
+    avg_batch_loss: batch_loss / batch_size
+    dims          : 1
+    val&type      : [0, 1], dtype=torch.FloatTensor
+    """
     batch_loss = 0
     for[dep, src, tar, dat] in zip(depth_maps, src_imgs, tar_imgs, dates):
         if dat=='2011_09_26':
@@ -149,7 +237,43 @@ def get_recon_loss(functions, depth_maps, src_imgs, tar_imgs, direction, dates, 
 
 # move to 2nd cuda device if training fullscale model
 def get_con_loss(functions, depth_maps, tar_imgs, direction, dates, batch_size, weighting):  
-
+    """
+    {Function}
+    Get L-R consistency loss from pair of predicted depth maps.
+    h*w = 96*320
+    
+    {Inputs}
+    functions : pixel-wise mapping functions defined in loss.py
+    
+    depth_maps: Predicted depth maps.
+    dims      : batch_size*1*h*w
+    val&type  : [0, 1], dtype=torch.FloatTensor
+    
+    tar_imgs  : Predicted depth maps of complementary view.
+    dims      : batch_size*1*h*w
+    val&type  : [0, 1], dtype=torch.FloatTensor
+    
+    direction : View transforming direction.
+    dims      : 1
+    val&type  : 'L2R' or 'R2L', dtype=str
+    
+    dates     : Dataset dates, used to match camera calibration parameters.
+    dims      : 1
+    val&type  : dtype=str
+    
+    batch_size
+    dims      : 1
+    val&type  : default=8, dtype=int
+    
+    weighting : Use weighting mask in loss function or not.
+    dims      : 1
+    val&type  : default=False(args.c_mask=0), dtype=int
+    
+    {Outputs}
+    avg_batch_loss: batch_loss / batch_size
+    dims          : 1
+    val&type      : [0, 1], dtype=torch.FloatTensor
+    """
     batch_loss = 0
     for[dep, tar, dat] in zip(depth_maps, tar_imgs, dates):
         if dat=='2011_09_26':
@@ -169,6 +293,22 @@ def get_con_loss(functions, depth_maps, tar_imgs, direction, dates, batch_size, 
     return batch_loss / batch_size
 
 def get_reg_loss(model, factor):
+    """
+    {Function}
+    Sum & weight all model parameters.
+    
+    {Inputs}
+    model   : Specified model.
+    
+    factor  : weighting factor for parameter regularization.
+    dims    : 1
+    val&type: [0, 1], dtype=float
+    
+    {Outputs}
+    factor*reg_loss: (weighted) sum of all model parameters.
+    dims           : 1
+    val&type       : dtype=float
+    """
     l1_crit = nn.L1Loss(size_average=False)
     reg_loss = 0.0
     for param in model.parameters():
@@ -177,6 +317,26 @@ def get_reg_loss(model, factor):
     return(factor * reg_loss)
 
 def adjust_learning_rate(optimizer, lr, lr_decay_rate):
+    """
+    {Function}
+    Adjust learning rate of specified model optimizer.
+    
+    {Inputs}
+    optimizer    : Specified model optimizer.
+    
+    lr           : learning rate.
+    dims         : 1
+    val&type     : [0, 1], dtype=float
+    
+    lr_decay_rate: decay rate (multiplier) of learning rate.
+    dims         : 1
+    val&type     : [0, 1], dtype=float
+    
+    {Outputs}
+    lr      : adjusted learning rate.
+    dims    : 1
+    val&type: [0, 1], dtype=float
+    """
     lr = lr * lr_decay_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
@@ -184,15 +344,64 @@ def adjust_learning_rate(optimizer, lr, lr_decay_rate):
     return lr
 
 def load_model(filename, model, optimizer):
+    """
+    {Functions}
+    Save model & optimizer state to specified path.
+    
+    {Inputs}
+    filename : .pth file containing model & optimizer state dicts.
+    model    : Initialized model architecture.
+    optimizer: Initialized optimizer of model specified above.
+    
+    {Outputs}
+    model    : Model with loaded weights.
+    optimizer: Optimizer with loaded training state.
+    """
     checkpoint = torch.load(filename)
     model.load_state_dict(checkpoint['state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer'])
     return model, optimizer
 
 def save_model(model, save_path):
+    """
+    {Functions}
+    Save model state to specified path.
+    
+    {Inputs}
+    model    : Specified model to save.
+    save_path: Specified path to save model (******.pth).
+    """
     torch.save(model.state_dict(), save_path)
 
 def save_image(pti, ptd, tempname, save_path, crop=True):
+    """
+    {Function}
+    Save concatenated source & predicted depth map image to file system.
+    H*W = 192*640
+    h*w = 96*320
+    
+    {Inputs}
+    pti      : Sample image of training set. Might be augmented.
+    dims     : 3*H*W
+    val&type : [0, 1], dtype=torch.FloatTensor
+    
+    ptd      : Predicted depth map of image above (pti).
+    dims     : 1*h*w
+    val&type : [0, 1], dtype=torch.FloatTensor
+    
+    tempname : specified saving file name.
+    dims     : 1
+    val&type : dtype=str
+    
+    save_path: specified path of saving image (******.jpg)
+    dims     : 1
+    val&type : dtype=str
+    
+    {Outputs}
+    cat     : Vertically concatenated image of sample image & predicted depth map. 
+    dims    : 3*(h*2)*w
+    val&type: [0, 255], dype=uint8
+    """
     # to numpy
     gray = np.transpose(ptd.cpu().detach().numpy(), (1,2,0)).squeeze()
     rgb = np.transpose(pti.cpu().detach().numpy(), (1,2,0))
@@ -215,6 +424,34 @@ def save_image(pti, ptd, tempname, save_path, crop=True):
     cv2.imwrite(save_name, cat)
     
 def save_recon_image(tar, pti, tempname, save_path):
+    """
+    {Function}
+    Save concatenated reconstructed & target depth map image to file system.
+    H*W = 192*640
+    h*w = 96*320
+    
+    {Inputs}
+    tar      : Sample image of training set, serving as target. Might be augmented.
+    dims     : 3*H*W
+    val&type : [0, 1], dtype=torch.FloatTensor
+    
+    pti      : Reconstructed image.
+    dims     : 3*h*w
+    val&type : [0, 1], dtype=torch.FloatTensor
+    
+    tempname : specified saving file name.
+    dims     : 1
+    val&type : dtype=str
+    
+    save_path: specified path of saving image (******.jpg)
+    dims     : 1
+    val&type : dtype=str
+    
+    {Outputs}
+    cat     : Vertically concatenated image of sample image & predicted depth map. 
+    dims    : 3*(h*2)*w
+    val&type: [0, 255], dype=uint8
+    """
     # to numpy
     rgb = np.transpose(pti.cpu().detach().numpy(), (1,2,0))
     rgb = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -304,8 +541,8 @@ def main():
             images_l = images_l.cuda()
             images_r = images_r.cuda()
         
-            # Forward pass, make predictions
-            depths_l = L(images_l) #sigmoided
+            # Forward pass, make predictions (sigmoided).
+            depths_l = L(images_l)
             depths_r = R(images_r)
             drive_dates = [s[13:23] for s in scans_l]
             
@@ -334,14 +571,11 @@ def main():
                                     tar_imgs=depths_l, 
                                     direction='R2L', dates=drive_dates, 
                                     batch_size=args.batch_size, weighting=args.c_mask)
-            
-            # Weights regularization loss
-            reg_loss = 0#get_reg_loss(L, factor=args.reg) + get_reg_loss(R, factor=args.reg)
-        
+
             # Weight & sum losses
             loss = (args.beta *(r_loss_L + r_loss_R) \
-                  + args.gamma*(c_loss_L + c_loss_R) \
-                  + reg_loss) / (2*(args.beta + args.gamma))
+                  + args.gamma*(c_loss_L + c_loss_R)) / (2*(args.beta + args.gamma))
+            #loss = 0.5*(c_loss_L + c_loss_R)
 
             # Back propagation & optimize
             loss.backward()
@@ -349,19 +583,18 @@ def main():
             R_optimizer.step()
 
             train_loss += loss.item()
-            r_step += (r_loss_L.item() + r_loss_R.item())
-            c_step += (c_loss_L.item() + c_loss_R.item())
+            r_step += ((r_loss_L.item() + r_loss_R.item()) / 2)
+            c_step += ((c_loss_L.item() + c_loss_R.item()) / 2)
         
             step_loss = train_loss / (batch_count * args.batch_size)
             if batch_count % args.print_every == 0:
                 print('Epoch: {} ({:.2f}%)\tStep Loss: {:.6f} \
-                       \n\tUnsu: {:.6f} \tCon: {:.6f} \tReg: {:.6f}'.format(
+                       \n\tUnsu: {:.6f} \tCon: {:.6f}'.format(
                     epoch+1,
                     100*(batch_count / len(train_loader)), 
                     step_loss,
-                    r_step / (batch_count * args.batch_size),
-                    c_step / (batch_count * args.batch_size),
-                    reg_loss
+                    r_step / batch_count,
+                    c_step / batch_count
                 ))
 
                 if args.image_output_dir is not None:
@@ -370,12 +603,12 @@ def main():
                     tempname = "R_epoch_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_image(pti=images_r[0], ptd=depths_r[0], tempname=tempname, save_path=args.image_output_dir)
                     
-                    tempname = "R_recon_{:02}_{:03}.jpg".format(epoch+1, n)
+                    """tempname = "R_recon_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_recon_image(images_r[args.batch_size-1], recon_img_R, \
                                      tempname=tempname, save_path=args.image_output_dir)
                     tempname = "L_recon_{:02}_{:03}.jpg".format(epoch+1, n)
                     save_recon_image(images_l[args.batch_size-1], recon_img_L, \
-                                     tempname=tempname, save_path=args.image_output_dir)
+                                     tempname=tempname, save_path=args.image_output_dir)"""
                     
                 n += 1
                 
@@ -405,7 +638,6 @@ def main():
             save_model(L, os.path.join(args.model_output_dir, fname))
             print("\n------Finish saving models------")
 
-    #adjust_learning_rate_here_every_epoch
     print("\n------Finish training------")  
 
     return
