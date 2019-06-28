@@ -373,7 +373,7 @@ def save_model(model, save_path):
     """
     torch.save(model.state_dict(), save_path)
 
-def save_image(pti, ptd, tempname, save_path, crop=True):
+def save_image(pti, ptd, tempname, save_path, crop=False):
     """
     {Function}
     Save concatenated source & predicted depth map image to file system.
@@ -575,7 +575,6 @@ def main():
             # Weight & sum losses
             loss = (args.beta *(r_loss_L + r_loss_R) \
                   + args.gamma*(c_loss_L + c_loss_R)) / (2*(args.beta + args.gamma))
-            #loss = 0.5*(c_loss_L + c_loss_R)
 
             # Back propagation & optimize
             loss.backward()

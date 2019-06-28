@@ -200,7 +200,7 @@ def get_su_loss(depth_maps, scan_files, batch_size):
     for[dep, scan_file] in zip(depth_maps, scan_files):
         dots = np.load(scan_file) 
 
-        sample_loss, sample_accuracy = gt_loss(dep, dots)
+        sample_loss, sample_accuracy = gt_loss(dep, dots, gt_augmentation=True)
         batch_loss += sample_loss
         batch_accuracy += sample_accuracy
 
@@ -329,7 +329,7 @@ def save_model(model, optimizer, save_path):
 
     torch.save(state, save_path)
 
-def save_image(pti, ptd, tempname, save_path, crop=True):
+def save_image(pti, ptd, tempname, save_path, crop=False):
     """
     {Function}
     Save concatenated source & predicted depth map image to file system.
@@ -533,7 +533,6 @@ def main():
             print("\n------Finish saving models------")
 
     print("\n------Finish training------")
-
     return
 
 if __name__ == "__main__":
